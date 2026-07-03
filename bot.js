@@ -210,13 +210,14 @@ async function showList(ctx, arg) {
   await ctx.reply(view.text, { reply_markup: view.keyboard });
 }
 
-// Кто может отмечать оплату: указан в ADMIN_IDS ИЛИ админ/создатель группы.
+// Кто может отмечать оплату: указан в ADMIN_IDS ИЛИ состоит в группе (любой участник).
 async function isAdmin(userId) {
   if (ADMIN_IDS.includes(String(userId))) return true;
   if (GROUP_CHAT_ID) {
     try {
       const m = await bot.api.getChatMember(GROUP_CHAT_ID, userId);
-      return m.status === "creator" || m.status === "administrator";
+      // любой, кто реально в группе (не вышел и не удалён)
+      return m.status !== "left" && m.status !== "kicked";
     } catch (e) { /* ignore */ }
   }
   return false;
