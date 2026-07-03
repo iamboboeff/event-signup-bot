@@ -10,9 +10,12 @@ if (!BOT_TOKEN) {
   console.error("✖ Нет BOT_TOKEN. Скопируй .env.example в .env и вставь токен от @BotFather.");
   process.exit(1);
 }
-const GROUP_CHAT_ID = process.env.GROUP_CHAT_ID || "";
-const ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map(s => s.trim()).filter(Boolean);
-const SHEET_URL = process.env.SHEET_WEBAPP_URL || ""; // веб-приложение Apps Script (Google Sheets)
+// Значения по умолчанию зашиты в код (тестовый проект): если переменная окружения
+// не задана — берём захардкоженное. НЕ секреты, поэтому в публичном репо это ок.
+// (BOT_TOKEN сюда НЕ пишем — его Telegram отозвёт, если найдёт в открытом репо.)
+const GROUP_CHAT_ID = process.env.GROUP_CHAT_ID || "-1003634961399";
+const ADMIN_IDS = (process.env.ADMIN_IDS || "1350559985").split(",").map(s => s.trim()).filter(Boolean);
+const SHEET_URL = process.env.SHEET_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbx7FmBNHr0lwSGs_OmL3MjhdOcKUix5Q4dBM2HIce8MNPrK1FQeP2yJYVe6caS85qVH5Q/exec"; // веб-приложение Apps Script (Google Sheets)
 // Публичный адрес сервиса (Cloud Run). Если задан — бот работает через webhook, иначе long-polling.
 const WEBHOOK_URL = process.env.WEBHOOK_URL || "";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || (BOT_TOKEN.split(":")[1] || "secret").slice(0, 16);
