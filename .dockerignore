@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.example
+*.log
+registrations.json
+credentials.json
+*.key.json
+.DS_Store
+.git
+.gitignore
+index.html
+server.js
+apps-script.gs

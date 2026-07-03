@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Doterra Event · Запись на мероприятие — прототип бота</title>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --panel: #ffffff;
+    --ink: #1c1e21;
+    --muted: #6b7280;
+    --line: #e4e6eb;
+    --accent: #3390ec;
+    --accent-ink: #ffffff;
+    --tg-chat-bg: #d9e2ec;
+    --tg-in: #ffffff;
+    --tg-out: #e1ffc7;
+    --ok: #2e7d32;
+    --warn: #b26a00;
+    --warn-bg: #fff4e0;
+    --ok-bg: #e7f5e8;
+    --shadow: 0 10px 40px rgba(0,0,0,.12);
+    --radius: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  header.top {
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 14px 18px; display: flex; align-items: center; gap: 14px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .brand { font-weight: 700; letter-spacing: .04em; font-size: 15px; }
+  .brand .mark { color: var(--accent); }
+  .tabs { margin-left: auto; display: flex; gap: 6px; background: #eef0f3; padding: 4px; border-radius: 12px; }
+  .tabs button {
+    border: 0; background: transparent; padding: 8px 16px; border-radius: 9px;
+    font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .tabs button.active { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+
+  main { max-width: 980px; margin: 0 auto; padding: 26px 18px 60px; }
+  .hint { font-size: 12.5px; color: var(--muted); margin: 0 0 18px; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ---------- Telegram chat ---------- */
+  .phone {
+    width: 390px; max-width: 100%; margin: 0 auto; background: var(--panel);
+    border-radius: 28px; box-shadow: var(--shadow); overflow: hidden; border: 1px solid var(--line);
+  }
+  .chat-head {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    background: linear-gradient(180deg,#5a8fd1,#4884c9); color: #fff;
+  }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; background: #fff2; display: grid; place-items: center; font-weight: 700; }
+  .chat-head .who { font-size: 14px; font-weight: 600; }
+  .chat-head .status { font-size: 11.5px; opacity: .8; }
+  .chat-head .restart { margin-left: auto; background: #ffffff22; border: 0; color: #fff; font-size: 12px; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+  .chat {
+    height: 470px; overflow-y: auto; padding: 16px 12px;
+    background: var(--tg-chat-bg);
+    background-image: radial-gradient(rgba(255,255,255,.35) 1px, transparent 1px);
+    background-size: 18px 18px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .row { display: flex; }
+  .row.user { justify-content: flex-end; }
+  .bubble {
+    max-width: 80%; padding: 8px 12px; border-radius: 14px; font-size: 14px; line-height: 1.4;
+    box-shadow: 0 1px 1px rgba(0,0,0,.08); white-space: pre-wrap; word-break: break-word;
+  }
+  .row.bot .bubble { background: var(--tg-in); border-bottom-left-radius: 4px; }
+  .row.user .bubble { background: var(--tg-out); border-bottom-right-radius: 4px; }
+  .row.sys { justify-content: center; }
+  .row.sys .bubble { background: #00000022; color: #1c1e21; font-size: 12px; max-width: 92%; box-shadow:none; }
+  .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .chat-btn {
+    border: 1px solid var(--accent); background: #fff; color: var(--accent);
+    padding: 7px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .chat-btn:hover { background: var(--accent); color: #fff; }
+  .chat-btn.wide { flex: 1 1 100%; text-align: center; }
+  .pay-link { display:inline-block; margin-top:6px; color: var(--accent); font-weight:600; text-decoration: none; border-bottom:1px dashed var(--accent); }
+  .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: var(--panel); }
+  .composer input {
+    flex: 1; border: 1px solid var(--line); border-radius: 20px; padding: 10px 14px; font-size: 14px; outline: none;
+  }
+  .composer input:disabled { background: #f3f4f6; color: #9aa0a6; }
+  .composer button {
+    border: 0; background: var(--accent); color: #fff; width: 40px; height: 40px; border-radius: 50%;
+    font-size: 17px; cursor: pointer;
+  }
+  .composer button:disabled { background: #b8c4d0; cursor: not-allowed; }
+
+  /* ---------- Cards / admin / list ---------- */
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px){ .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card .sub { margin: 0 0 14px; font-size: 12.5px; color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; min-height: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px; background: #eef3fb; color: #1c2b46;
+    border: 1px solid #d7e3f6; padding: 6px 8px 6px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
+  }
+  .chip button { border: 0; background: #00000010; color: #444; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
+  .chip button:hover { background: #e23b3b; color: #fff; }
+  .addrow { display: flex; gap: 8px; }
+  .addrow input { flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 600; }
+  .field input, .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font-size: 13px; font-family: inherit; }
+  .field textarea { resize: vertical; min-height: 62px; line-height: 1.4; }
+  .btn { border: 0; border-radius: 10px; padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.ghost { background: #eef0f3; color: var(--ink); }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .toolbar select { border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font-size: 13px; background: #fff; }
+  .count { font-size: 13px; color: var(--muted); }
+  .count b { color: var(--ink); }
+
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  th, td { text-align: left; padding: 11px 14px; font-size: 13px; border-bottom: 1px solid var(--line); }
+  th { background: #f7f8fa; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+  .badge.free { background: var(--ok-bg); color: var(--ok); }
+  .badge.pay { background: var(--warn-bg); color: var(--warn); }
+  .empty { text-align: center; color: var(--muted); padding: 30px; font-size: 13px; }
+
+  /* ---------- toast ---------- */
+  #toasts { position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; gap: 10px; z-index: 50; }
+  .toast {
+    background: #1f2937; color: #fff; padding: 12px 16px; border-radius: 12px; box-shadow: var(--shadow);
+    font-size: 13px; max-width: 320px; animation: slidein .25s ease; border-left: 4px solid var(--accent);
+  }
+  .toast b { display:block; margin-bottom:2px; }
+  @keyframes slidein { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+</style>
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark">D</span> Doterra Event · Запись на мероприятие</div>
+    <nav class="tabs">
+      <button id="tab-btn-bot" class="active" data-tab="bot">Превью бота</button>
+      <button id="tab-btn-admin" data-tab="admin">Админка</button>
+      <button id="tab-btn-list" data-tab="list">Записи</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===== BOT PREVIEW ===== -->
+    <section id="view-bot" class="view active">
+      <p class="hint">Так выглядит диалог в Telegram. Кнопки и шаги берутся из «Админки». Это прототип — данные пробные, оплата — переводом по реквизитам (задаются в «Админке»).</p>
+      <div class="phone">
+        <div class="chat-head">
+          <div class="avatar">D</div>
+          <div>
+            <div class="who">Doterra Event · запись</div>
+            <div class="status">бот · онлайн</div>
+          </div>
+          <button id="restart" class="restart">Заново</button>
+        </div>
+        <div id="chat" class="chat"></div>
+        <div class="composer">
+          <input id="nameInput" type="text" placeholder="Введите Фамилию и Имя…" autocomplete="off" />
+          <button id="sendBtn" title="Отправить">➤</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ADMIN ===== -->
+    <section id="view-admin" class="view">
+      <p class="hint">Организатор меняет варианты здесь — без правки кода. Изменения сразу применяются к боту. (В рабочей версии это будет в Google-таблице или защищённой админке.)</p>
+      <div class="grid">
+        <div class="card">
+          <h3>Наставники</h3>
+          <p class="sub">Варианты для шага «Наставник».</p>
+          <div id="mentorChips" class="chips"></div>
+          <div class="addrow">
+            <input id="mentorInput" placeholder="Например: Золото" />
+            <button class="btn primary" id="mentorAdd">Добавить</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Даты</h3>
+          <p class="sub">Варианты для шага «Дата».</p>
+          <div id="dateChips" class="chips"></div>
+          <div class="addrow">
+            <input id="dateInput" placeholder="Например: Понедельник" />
+            <button class="btn primary" id="dateAdd">Добавить</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Оплата</h3>
+          <p class="sub">Для тех, кто без абонемента.</p>
+          <div class="field">
+            <label>Стоимость участия</label>
+            <input id="priceInput" placeholder="1 500 ₽" />
+          </div>
+          <div class="field">
+            <label>Реквизиты для перевода</label>
+            <textarea id="payInput" rows="3" placeholder="Напр.: СБП +7 900 000-00-00 (Сбер), получатель Имя Ф."></textarea>
+          </div>
+          <button class="btn primary" id="paySave">Сохранить</button>
+        </div>
+        <div class="card">
+          <h3>Сброс</h3>
+          <p class="sub">Вернуть пробные данные и очистить записи.</p>
+          <button class="btn ghost" id="resetAll">Сбросить к образцу</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== LIST ===== -->
+    <section id="view-list" class="view">
+      <p class="hint">Общий список записавшихся. В рабочей версии это Google-таблица (доступ у организаторов) + уведомления в Telegram-группе.</p>
+      <div class="toolbar">
+        <label for="dayFilter" style="font-size:13px;font-weight:600;color:var(--muted)">День:</label>
+        <select id="dayFilter"></select>
+        <span id="listCount" class="count"></span>
+        <button class="btn ghost" id="clearRegs" style="margin-left:auto">Очистить записи</button>
+      </div>
+      <div id="listWrap"></div>
+    </section>
+  </main>
+
+  <div id="toasts"></div>
+
+<script>
+"use strict";
+(function () {
+  // ---------------- storage ----------------
+  const LS_CONFIG = "esb.config.v1";
+  const LS_REGS = "esb.regs.v1";
+
+  const DEFAULT_CONFIG = {
+    mentors: ["Серебро", "Золото", "Бронза", "Платина"],
+    dates: ["Понедельник", "Среда", "Пятница"],
+    price: "1 500 ₽",
+    payDetails: "Перевод по СБП: +7 900 000-00-00 (Сбербанк), получатель Имя Ф."
+  };
+
+  function sampleRegs() {
+    const now = Date.now();
+    const mk = (name, mentor, date, sub, agoMin) => ({
+      id: "r" + (now - agoMin * 60000) + Math.random().toString(36).slice(2, 6),
+      name, mentor, date, sub, ts: now - agoMin * 60000
+    });
+    return [
+      mk("Иванова Мария", "Серебро", "Понедельник", true, 220),
+      mk("Петров Алексей", "Золото", "Понедельник", false, 180),
+      mk("Смирнова Ольга", "Платина", "Понедельник", true, 95),
+      mk("Сидорова Анна", "Серебро", "Среда", true, 60),
+      mk("Кузнецов Дмитрий", "Бронза", "Пятница", false, 25)
+    ];
+  }
+
+  function load(key, fallback) {
+    try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; }
+    catch (e) { return fallback; }
+  }
+  function save(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
+
+  let config = Object.assign({}, JSON.parse(JSON.stringify(DEFAULT_CONFIG)), load(LS_CONFIG, null) || {});
+  let regs = load(LS_REGS, null) || sampleRegs();
+  if (!load(LS_CONFIG, null)) save(LS_CONFIG, config);
+  if (!load(LS_REGS, null)) save(LS_REGS, regs);
+
+  // ---------------- tabs ----------------
+  const tabBtns = document.querySelectorAll(".tabs button");
+  tabBtns.forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  function switchTab(tab) {
+    tabBtns.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+    document.getElementById("view-" + tab).classList.add("active");
+    if (tab === "admin") renderAdmin();
+    if (tab === "list") renderList();
+  }
+
+  // ---------------- bot flow ----------------
+  const chatEl = document.getElementById("chat");
+  const nameInput = document.getElementById("nameInput");
+  const sendBtn = document.getElementById("sendBtn");
+  let messages = [];
+  let step = "name";
+  let draft = {};
+
+  function fmtTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function renderChat() {
+    chatEl.innerHTML = "";
+    messages.forEach((m, i) => {
+      const row = document.createElement("div");
+      row.className = "row " + m.who;
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = m.text;
+      if (m.payLink) {
+        const a = document.createElement("a");
+        a.className = "pay-link"; a.href = m.payLink; a.target = "_blank";
+        a.textContent = m.payLink;
+        bubble.appendChild(document.createElement("br"));
+        bubble.appendChild(a);
+      }
+      // buttons only on the last bot message that is awaiting input
+      if (m.buttons && i === messages.length - 1) {
+        const wrap = document.createElement("div");
+        wrap.className = "btns";
+        m.buttons.forEach(opt => {
+          const btn = document.createElement("button");
+          btn.className = "chat-btn" + (m.buttons.length === 2 ? " wide" : "");
+          btn.textContent = opt;
+          btn.setAttribute("data-value", opt);
+          btn.addEventListener("click", () => onPick(opt));
+          wrap.appendChild(btn);
+        });
+        bubble.appendChild(wrap);
+      }
+      row.appendChild(bubble);
+      chatEl.appendChild(row);
+    });
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  function botSay(text, opts) {
+    messages.push(Object.assign({ who: "bot", text }, opts || {}));
+    renderChat();
+  }
+  function userSay(text) { messages.push({ who: "user", text }); renderChat(); }
+  function sysSay(text) { messages.push({ who: "sys", text }); renderChat(); }
+
+  function setComposer(enabled) {
+    nameInput.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+    nameInput.placeholder = enabled ? "Введите Фамилию и Имя…" : "Выберите вариант кнопкой ниже";
+    if (enabled) setTimeout(() => nameInput.focus(), 50);
+  }
+
+  function startFlow() {
+    messages = []; draft = {}; step = "name";
+    botSay("Здравствуйте! Это запись на «Doterra Event». Давайте оформим вашу заявку.");
+    botSay("Напишите вашу Фамилию и Имя:");
+    setComposer(true);
+    renderChat();
+  }
+
+  function askMentor() {
+    step = "mentor";
+    setComposer(false);
+    if (!config.mentors.length) { botSay("⚠️ Наставники ещё не настроены. Обратитесь к организатору."); return; }
+    botSay("Выберите наставника:", { buttons: config.mentors.slice() });
+  }
+  function askDate() {
+    step = "date";
+    if (!config.dates.length) { botSay("⚠️ Даты ещё не настроены. Обратитесь к организатору."); return; }
+    botSay("Выберите дату:", { buttons: config.dates.slice() });
+  }
+  function askSub() {
+    step = "sub";
+    botSay("Вы участвуете по абонементу?", { buttons: ["Да", "Нет"] });
+  }
+
+  function onSend() {
+    if (step !== "name") return;
+    const val = nameInput.value.trim();
+    if (val.length < 2) { nameInput.focus(); return; }
+    draft.name = val;
+    userSay(val);
+    nameInput.value = "";
+    askMentor();
+  }
+
+  function onPick(value) {
+    // strip buttons from the message just answered
+    const last = messages[messages.length - 1];
+    if (last && last.buttons) delete last.buttons;
+    userSay(value);
+    if (step === "mentor") { draft.mentor = value; askDate(); }
+    else if (step === "date") { draft.date = value; askSub(); }
+    else if (step === "sub") { draft.sub = (value === "Да"); finish(); }
+  }
+
+  function finish() {
+    step = "done";
+    const reg = {
+      id: "r" + Date.now() + Math.random().toString(36).slice(2, 6),
+      name: draft.name, mentor: draft.mentor, date: draft.date, sub: draft.sub, ts: Date.now()
+    };
+    regs.push(reg);
+    save(LS_REGS, regs);
+
+    if (draft.sub) {
+      botSay("Отлично! По абонементу участие бесплатное.\nВы записаны ✅");
+    } else {
+      botSay("Стоимость участия — " + config.price + ".\nОплата переводом по реквизитам ниже — после перевода место подтвердим 👇\n\n" + config.payDetails);
+    }
+
+    // simulated group notification + "open the day's list"
+    const dayList = regs.filter(r => r.date === reg.date);
+    notify(reg);
+    const lines = dayList.map((r, i) => (i + 1) + ". " + r.name + (r.sub ? " · абонемент" : " · оплата")).join("\n");
+    sysSay("📋 Список на «" + reg.date + "» (" + dayList.length + "):\n" + lines);
+    botSay("Спасибо! Чтобы записать ещё одного человека — нажмите «Заново».");
+    setComposer(false);
+  }
+
+  document.getElementById("restart").addEventListener("click", startFlow);
+  sendBtn.addEventListener("click", onSend);
+  nameInput.addEventListener("keydown", e => { if (e.key === "Enter") onSend(); });
+
+  // ---------------- toast (group notification) ----------------
+  function notify(reg) {
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = "<b>🔔 Новая запись (в группу)</b>" +
+      esc(reg.name) + " → " + esc(reg.date) + "<br>Наставник: " + esc(reg.mentor) +
+      " · " + (reg.sub ? "по абонементу" : "оплата " + esc(config.price));
+    document.getElementById("toasts").appendChild(t);
+    setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .4s"; }, 5000);
+    setTimeout(() => t.remove(), 5500);
+  }
+  function esc(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+
+  // ---------------- admin ----------------
+  function renderChips(containerId, arr, onRemove) {
+    const c = document.getElementById(containerId);
+    c.innerHTML = "";
+    if (!arr.length) { c.innerHTML = '<span style="font-size:12.5px;color:var(--muted)">пока пусто</span>'; return; }
+    arr.forEach((item, idx) => {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.appendChild(document.createTextNode(item));
+      const x = document.createElement("button");
+      x.textContent = "×";
+      x.title = "Удалить";
+      x.addEventListener("click", () => onRemove(idx));
+      chip.appendChild(x);
+      c.appendChild(chip);
+    });
+  }
+
+  function renderAdmin() {
+    renderChips("mentorChips", config.mentors, idx => { config.mentors.splice(idx, 1); save(LS_CONFIG, config); renderAdmin(); });
+    renderChips("dateChips", config.dates, idx => { config.dates.splice(idx, 1); save(LS_CONFIG, config); renderAdmin(); });
+    document.getElementById("priceInput").value = config.price;
+    document.getElementById("payInput").value = config.payDetails;
+  }
+
+  function addItem(key, inputId) {
+    const input = document.getElementById(inputId);
+    const v = input.value.trim();
+    if (!v) return;
+    if (config[key].includes(v)) { input.value = ""; return; }
+    config[key].push(v);
+    save(LS_CONFIG, config);
+    input.value = "";
+    renderAdmin();
+  }
+  document.getElementById("mentorAdd").addEventListener("click", () => addItem("mentors", "mentorInput"));
+  document.getElementById("dateAdd").addEventListener("click", () => addItem("dates", "dateInput"));
+  document.getElementById("mentorInput").addEventListener("keydown", e => { if (e.key === "Enter") addItem("mentors", "mentorInput"); });
+  document.getElementById("dateInput").addEventListener("keydown", e => { if (e.key === "Enter") addItem("dates", "dateInput"); });
+  document.getElementById("paySave").addEventListener("click", () => {
+    config.price = document.getElementById("priceInput").value.trim() || DEFAULT_CONFIG.price;
+    config.payDetails = document.getElementById("payInput").value.trim() || DEFAULT_CONFIG.payDetails;
+    save(LS_CONFIG, config);
+    flash("Сохранено");
+  });
+  document.getElementById("resetAll").addEventListener("click", () => {
+    config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    regs = sampleRegs();
+    save(LS_CONFIG, config); save(LS_REGS, regs);
+    renderAdmin(); startFlow();
+    flash("Сброшено к образцу");
+  });
+  function flash(msg) {
+    const t = document.createElement("div");
+    t.className = "toast"; t.textContent = msg;
+    document.getElementById("toasts").appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+
+  // ---------------- list ----------------
+  const dayFilter = document.getElementById("dayFilter");
+  dayFilter.addEventListener("change", renderList);
+  document.getElementById("clearRegs").addEventListener("click", () => {
+    regs = []; save(LS_REGS, regs); renderList();
+  });
+
+  function renderList() {
+    // rebuild filter options (keep selection if possible)
+    const cur = dayFilter.value || "__all__";
+    const days = Array.from(new Set([].concat(config.dates, regs.map(r => r.date))));
+    dayFilter.innerHTML = "";
+    const optAll = document.createElement("option"); optAll.value = "__all__"; optAll.textContent = "Все дни";
+    dayFilter.appendChild(optAll);
+    days.forEach(d => { const o = document.createElement("option"); o.value = d; o.textContent = d; dayFilter.appendChild(o); });
+    dayFilter.value = days.includes(cur) || cur === "__all__" ? cur : "__all__";
+
+    const sel = dayFilter.value;
+    const rows = (sel === "__all__" ? regs : regs.filter(r => r.date === sel))
+      .slice().sort((a, b) => a.ts - b.ts);
+
+    document.getElementById("listCount").innerHTML =
+      "Всего записей: <b>" + rows.length + "</b>" + (sel === "__all__" ? "" : " на «" + sel + "»");
+
+    const wrap = document.getElementById("listWrap");
+    if (!rows.length) { wrap.innerHTML = '<div class="empty">Пока нет записей.</div>'; return; }
+
+    let html = '<table><thead><tr>' +
+      '<th>#</th><th>Фамилия Имя</th><th>Наставник</th><th>Дата</th><th>Абонемент</th><th>Статус</th><th>Время</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach((r, i) => {
+      html += "<tr>" +
+        "<td>" + (i + 1) + "</td>" +
+        "<td>" + esc(r.name) + "</td>" +
+        "<td>" + esc(r.mentor) + "</td>" +
+        "<td>" + esc(r.date) + "</td>" +
+        "<td>" + (r.sub ? "Да" : "Нет") + "</td>" +
+        "<td>" + (r.sub
+          ? '<span class="badge free">Бесплатно</span>'
+          : '<span class="badge pay">Ожидает оплаты</span>') + "</td>" +
+        "<td>" + fmtTime(r.ts) + "</td>" +
+        "</tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }
+
+  // ---------------- init ----------------
+  startFlow();
+})();
+</script>
+</body>
+</html>
