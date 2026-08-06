@@ -277,7 +277,15 @@ async function handlePayToggle(ctx, data) {
   // сообщить записавшемуся
   if (paid && reg.userId) {
     try {
-      await bot.api.sendMessage(reg.userId, `✅ Ваша оплата подтверждена. Вы записаны на «${reg.date}». До встречи!`);
+      await bot.api.sendMessage(
+        reg.userId,
+        `✅ Ваша оплата подтверждена. Бронь на «${reg.date}» подтверждена. До встречи!`
+      );
+      await bot.api.sendMessage(
+        reg.userId,
+        "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
+        { reply_markup: mainMenu }
+      );
     } catch (e) { /* пользователь мог не начинать диалог с ботом */ }
   }
 }
@@ -446,18 +454,16 @@ async function finish(ctx, draft) {
 
   if (draft.sub) {
     await ctx.reply("Отлично! По абонементу участие бесплатное.\nВы записаны ✅");
+    await ctx.reply(
+      "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
+      { reply_markup: mainMenu }
+    );
   } else {
     await ctx.reply(
       `Стоимость участия — ${cfg.price}.\nОплата переводом по реквизитам ниже. После перевода нажмите «Я оплатил(а)» 👇\n\n${cfg.payDetails}`,
       { reply_markup: new InlineKeyboard().text("✅ Я оплатил(а)", `claim:${reg.id}`) }
     );
   }
-
-  // список участникам не показываем — только подсказываем, как записать ещё одного
-  await ctx.reply(
-    "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
-    { reply_markup: mainMenu }
-  );
 
   // Уведомление в группу: для абонемента — сразу (запись подтверждена, оплаты нет).
   // Для платных уведомление НЕ шлём здесь — оно уйдёт только после нажатия «Я оплатил(а)».
