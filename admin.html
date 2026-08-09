@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Админ-панель бота</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--tg-theme-secondary-bg-color, #f3f1f7);
+      --card: var(--tg-theme-bg-color, #ffffff);
+      --text: var(--tg-theme-text-color, #201b2c);
+      --hint: var(--tg-theme-hint-color, #77717e);
+      --accent: var(--tg-theme-button-color, #6f4dbf);
+      --accent-text: var(--tg-theme-button-text-color, #ffffff);
+      --line: color-mix(in srgb, var(--hint) 22%, transparent);
+      --danger: #d95050;
+      --success: #25845f;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+    button, input, textarea { font: inherit; }
+    .shell { width: min(760px, 100%); margin: 0 auto; padding: 20px 14px calc(110px + env(safe-area-inset-bottom)); }
+    header { padding: 8px 4px 18px; }
+    .eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 12px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(25px, 7vw, 36px); line-height: 1.08; letter-spacing: -.03em; }
+    .intro { margin: 10px 0 0; color: var(--hint); line-height: 1.45; font-size: 14px; }
+    .identity { display: inline-flex; align-items: center; gap: 7px; margin-top: 12px; padding: 7px 10px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 11%, var(--card)); font-size: 12px; font-weight: 650; }
+    .identity::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+    .grid { display: grid; gap: 12px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 17px; box-shadow: 0 8px 24px rgba(32, 27, 44, .045); }
+    .card h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: -.01em; }
+    .card-note { margin: 0 0 15px; color: var(--hint); font-size: 12px; line-height: 1.4; }
+    .field { margin-top: 13px; }
+    label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 700; color: var(--hint); }
+    input, textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px;
+      background: var(--bg); color: var(--text); outline: none;
+    }
+    textarea { min-height: 92px; resize: vertical; line-height: 1.4; }
+    input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+    .items { display: grid; gap: 8px; }
+    .item { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+    .item-actions { display: flex; gap: 4px; }
+    .icon-btn {
+      width: 36px; height: 36px; border: 0; border-radius: 10px; color: var(--hint);
+      background: var(--bg); cursor: pointer; font-weight: 800;
+    }
+    .icon-btn.danger { color: var(--danger); }
+    .add-btn { width: 100%; margin-top: 10px; border: 1px dashed var(--accent); border-radius: 12px; padding: 10px; background: transparent; color: var(--accent); font-weight: 750; cursor: pointer; }
+    .savebar {
+      position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; padding: 12px max(14px, calc((100vw - 760px) / 2 + 14px)) calc(12px + env(safe-area-inset-bottom));
+      background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(16px); border-top: 1px solid var(--line);
+    }
+    .save { width: 100%; border: 0; border-radius: 14px; padding: 13px 16px; background: var(--accent); color: var(--accent-text); font-weight: 800; cursor: pointer; }
+    .save:disabled { opacity: .55; cursor: wait; }
+    .status { min-height: 18px; margin: 7px 2px 0; text-align: center; font-size: 12px; color: var(--hint); }
+    .status.ok { color: var(--success); }
+    .status.error { color: var(--danger); }
+    .loading { padding: 44px 10px; text-align: center; color: var(--hint); }
+    .hidden { display: none !important; }
+    @media (min-width: 650px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+      .card.wide { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">Управление ботом</p>
+      <h1>Настройки записи</h1>
+      <p class="intro">Изменения сразу появятся в новых анкетах. Уже оформленные заявки останутся без изменений.</p>
+      <div id="identity" class="identity">Проверяем доступ…</div>
+    </header>
+
+    <div id="loading" class="loading">Загружаем настройки…</div>
+    <section id="form" class="grid hidden">
+      <article class="card wide">
+        <h2>Основное</h2>
+        <p class="card-note">Название события и условия участия.</p>
+        <div class="field">
+          <label for="eventName">Название мероприятия</label>
+          <input id="eventName" maxlength="120" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="price">Стоимость</label>
+          <input id="price" maxlength="80" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="payDetails">Реквизиты и инструкция по оплате</label>
+          <textarea id="payDetails" maxlength="1200"></textarea>
+        </div>
+      </article>
+
+      <article class="card" data-list-card="cities">
+        <h2>Города</h2>
+        <p class="card-note">Первый шаг анкеты.</p>
+        <div class="items"></div>
+        <button class="add-btn" type="button">＋ Добавить город</button>
+      </article>
+
+      <article class="card" data-list-card="programs">
+        <h2>Направления</h2>
+        <p class="card-note">Занятия и мероприятия после выбора города.</p>
+        <div class="items"></div>
+        <button class="add-btn" type="button">＋ Добавить направление</button>
+      </article>
+
+      <article class="card" data-list-card="dates">
+        <h2>Даты</h2>
+        <p class="card-note">Доступные варианты даты или дня.</p>
+        <div class="items"></div>
+        <button class="add-btn" type="button">＋ Добавить дату</button>
+      </article>
+
+      <article class="card" data-list-card="mentors">
+        <h2>Наставники</h2>
+        <p class="card-note">Список наставников для записи.</p>
+        <div class="items"></div>
+        <button class="add-btn" type="button">＋ Добавить наставника</button>
+      </article>
+    </section>
+  </main>
+
+  <div id="savebar" class="savebar hidden">
+    <button id="save" class="save" type="button">Сохранить изменения</button>
+    <div id="status" class="status"></div>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+      const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) { tg.ready(); tg.expand(); }
+
+      const initData = tg ? tg.initData : "";
+      const user = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
+      const identity = document.getElementById("identity");
+      const loading = document.getElementById("loading");
+      const form = document.getElementById("form");
+      const savebar = document.getElementById("savebar");
+      const saveButton = document.getElementById("save");
+      const status = document.getElementById("status");
+      let draft = null;
+
+      identity.textContent = user
+        ? `${user.first_name || "Администратор"}${user.username ? " · @" + user.username : ""}`
+        : "Доступ через Telegram";
+
+      function api(path, options = {}) {
+        return fetch(path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Init-Data": initData,
+            ...(options.headers || {})
+          }
+        }).then(async response => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || "Не удалось выполнить запрос");
+          return data;
+        });
+      }
+
+      function setStatus(message, kind = "") {
+        status.textContent = message;
+        status.className = "status" + (kind ? " " + kind : "");
+      }
+
+      function renderList(key) {
+        const card = document.querySelector(`[data-list-card="${key}"]`);
+        const container = card.querySelector(".items");
+        container.innerHTML = "";
+        draft[key].forEach((value, index) => {
+          const row = document.createElement("div");
+          row.className = "item";
+
+          const input = document.createElement("input");
+          input.value = value;
+          input.maxLength = 120;
+          input.setAttribute("aria-label", `Элемент ${index + 1}`);
+          input.addEventListener("input", () => { draft[key][index] = input.value; setStatus("Есть несохранённые изменения"); });
+
+          const actions = document.createElement("div");
+          actions.className = "item-actions";
+          [
+            ["↑", "Поднять выше", () => move(key, index, -1)],
+            ["↓", "Опустить ниже", () => move(key, index, 1)],
+            ["×", "Удалить", () => remove(key, index), "danger"]
+          ].forEach(([text, label, action, extra]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "icon-btn" + (extra ? " " + extra : "");
+            button.textContent = text;
+            button.title = label;
+            button.setAttribute("aria-label", label);
+            button.addEventListener("click", action);
+            actions.appendChild(button);
+          });
+
+          row.append(input, actions);
+          container.appendChild(row);
+        });
+      }
+
+      function move(key, index, delta) {
+        const next = index + delta;
+        if (next < 0 || next >= draft[key].length) return;
+        [draft[key][index], draft[key][next]] = [draft[key][next], draft[key][index]];
+        renderList(key);
+        setStatus("Есть несохранённые изменения");
+      }
+
+      function remove(key, index) {
+        if (draft[key].length === 1) { setStatus("Нужен хотя бы один вариант", "error"); return; }
+        draft[key].splice(index, 1);
+        renderList(key);
+        setStatus("Есть несохранённые изменения");
+      }
+
+      document.querySelectorAll("[data-list-card]").forEach(card => {
+        const key = card.dataset.listCard;
+        card.querySelector(".add-btn").addEventListener("click", () => {
+          draft[key].push("");
+          renderList(key);
+          card.querySelector(".items .item:last-child input").focus();
+          setStatus("Заполните новый вариант");
+        });
+      });
+
+      ["eventName", "price", "payDetails"].forEach(key => {
+        document.getElementById(key).addEventListener("input", event => {
+          if (draft) draft[key] = event.target.value;
+          setStatus("Есть несохранённые изменения");
+        });
+      });
+
+      saveButton.addEventListener("click", async () => {
+        if (!draft) return;
+        saveButton.disabled = true;
+        setStatus("Сохраняем…");
+        try {
+          const result = await api("/api/admin/config", { method: "PUT", body: JSON.stringify(draft) });
+          draft = result.config;
+          ["eventName", "price", "payDetails"].forEach(key => { document.getElementById(key).value = draft[key] || ""; });
+          ["cities", "programs", "dates", "mentors"].forEach(renderList);
+          setStatus("Настройки сохранены", "ok");
+          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+        } catch (error) {
+          setStatus(error.message, "error");
+          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
+        } finally {
+          saveButton.disabled = false;
+        }
+      });
+
+      api("/api/admin/config")
+        .then(result => {
+          draft = result.config;
+          ["eventName", "price", "payDetails"].forEach(key => { document.getElementById(key).value = draft[key] || ""; });
+          ["cities", "programs", "dates", "mentors"].forEach(renderList);
+          loading.classList.add("hidden");
+          form.classList.remove("hidden");
+          savebar.classList.remove("hidden");
+        })
+        .catch(error => {
+          loading.textContent = error.message + ". Откройте панель заново командой /admin.";
+          identity.textContent = "Доступ не подтверждён";
+        });
+    })();
+  </script>
+</body>
+</html>

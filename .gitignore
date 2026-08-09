@@ -1,6 +1,7 @@
 node_modules/
 .env
 registrations.json
+data/
 credentials.json
 *.key.json
 *.log

@@ -2,6 +2,7 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const crypto = require("crypto");
 const { Bot, InlineKeyboard, Keyboard, webhookCallback } = require("grammy");
 
 // ---------- env ----------
@@ -15,85 +16,111 @@ if (!BOT_TOKEN) {
 // (BOT_TOKEN сюда НЕ пишем — его Telegram отозвёт, если найдёт в открытом репо.)
 const GROUP_CHAT_ID = process.env.GROUP_CHAT_ID || "-1003634961399";
 const ADMIN_IDS = (process.env.ADMIN_IDS || "1350559985").split(",").map(s => s.trim()).filter(Boolean);
-const SHEET_URL = process.env.SHEET_WEBAPP_URL || "https://script.google.com/macros/s/AKfycbx7FmBNHr0lwSGs_OmL3MjhdOcKUix5Q4dBM2HIce8MNPrK1FQeP2yJYVe6caS85qVH5Q/exec"; // веб-приложение Apps Script (Google Sheets)
+const ADMIN_USERNAMES = (process.env.ADMIN_USERNAMES || "")
+  .split(",")
+  .map(s => s.trim().replace(/^@/, "").toLowerCase())
+  .filter(Boolean);
 // Публичный адрес сервиса (Cloud Run). Если задан — бот работает через webhook, иначе long-polling.
 const WEBHOOK_URL = process.env.WEBHOOK_URL || "";
+// Полный HTTPS-адрес админки. Для webhook автоматически получается из WEBHOOK_URL.
+const ADMIN_WEBAPP_URL = process.env.ADMIN_WEBAPP_URL || (WEBHOOK_URL ? WEBHOOK_URL.replace(/\/$/, "") + "/admin" : "");
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || (BOT_TOKEN.split(":")[1] || "secret").slice(0, 16);
 const PORT = Number(process.env.PORT) || 8080;
 const WEBHOOK_PATH = "/webhook";
 
-// ---------- storage (v1: локальные файлы; шаг 2 — Google Sheets) ----------
-const CONFIG_PATH = path.join(__dirname, "config.json");
-const REGS_PATH = path.join(__dirname, "registrations.json");
+// ---------- storage ----------
+// config.json хранит только исходные значения. Все изменения из админки и
+// заявки лежат отдельно, поэтому обновление кода их не перезаписывает.
+const DEFAULT_CONFIG_PATH = path.join(__dirname, "config.json");
+const DEFAULT_ADMINS_PATH = path.join(__dirname, "admins.json");
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
+const CONFIG_PATH = path.join(DATA_DIR, "config.json");
+const ADMINS_PATH = path.join(DATA_DIR, "admins.json");
+const REGS_PATH = path.join(DATA_DIR, "registrations.json");
+const LEGACY_REGS_PATH = path.join(__dirname, "registrations.json");
+const ADMIN_HTML_PATH = path.join(__dirname, "admin.html");
+
+function readJson(filePath, fallback) {
+  try { return JSON.parse(fs.readFileSync(filePath, "utf8")); }
+  catch (e) { return fallback; }
+}
+
+function writeJsonAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = filePath + ".tmp";
+  fs.writeFileSync(tempPath, JSON.stringify(value, null, 2));
+  fs.renameSync(tempPath, filePath);
+}
 
 function loadConfig() {
-  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-}
-function loadRegs() {
-  try { return JSON.parse(fs.readFileSync(REGS_PATH, "utf8")); }
-  catch (e) { return []; }
-}
-function saveRegs(regs) {
-  fs.writeFileSync(REGS_PATH, JSON.stringify(regs, null, 2));
+  const defaults = readJson(DEFAULT_CONFIG_PATH, {});
+  const saved = readJson(CONFIG_PATH, null);
+  return normalizeConfig(saved || defaults, defaults);
 }
 
-// Настройки: если задан Google Sheet — берём оттуда (кэш 30с), иначе локальный config.json.
-let _cfgCache = null, _cfgCacheAt = 0;
+function normalizeConfig(config, fallback = readJson(DEFAULT_CONFIG_PATH, {})) {
+  const source = config && typeof config === "object" ? config : {};
+  const normalized = { ...fallback, ...source };
+  ["cities", "programs", "mentors", "dates"].forEach(key => {
+    if (!Array.isArray(source[key]) || !source[key].length) normalized[key] = fallback[key];
+  });
+  return normalized;
+}
+
+function saveConfig(config) {
+  const normalized = normalizeConfig(config);
+  writeJsonAtomic(CONFIG_PATH, normalized);
+  return normalized;
+}
+
+function normalizeAdminStore(store) {
+  const source = store && typeof store === "object" ? store : {};
+  return {
+    ids: [...new Set((Array.isArray(source.ids) ? source.ids : [])
+      .map(value => String(value).trim())
+      .filter(value => /^\d+$/.test(value)))],
+    usernames: [...new Set((Array.isArray(source.usernames) ? source.usernames : [])
+      .map(value => String(value).trim().replace(/^@/, "").toLowerCase())
+      .filter(Boolean))]
+  };
+}
+
+function loadAdmins() {
+  const saved = readJson(ADMINS_PATH, null);
+  if (saved) return normalizeAdminStore(saved);
+
+  const defaults = normalizeAdminStore(readJson(DEFAULT_ADMINS_PATH, {}));
+  const initial = normalizeAdminStore({
+    ids: [...defaults.ids, ...ADMIN_IDS],
+    usernames: [...defaults.usernames, ...ADMIN_USERNAMES]
+  });
+  writeJsonAtomic(ADMINS_PATH, initial);
+  return initial;
+}
+
+function saveAdmins(admins) {
+  const normalized = normalizeAdminStore(admins);
+  writeJsonAtomic(ADMINS_PATH, normalized);
+  return normalized;
+}
+
+function loadRegs() {
+  const current = readJson(REGS_PATH, null);
+  if (current) return current;
+  const legacy = readJson(LEGACY_REGS_PATH, []);
+  writeJsonAtomic(REGS_PATH, legacy);
+  return legacy;
+}
+function saveRegs(regs) {
+  writeJsonAtomic(REGS_PATH, regs);
+}
+
 async function getConfig() {
-  if (SHEET_URL) {
-    if (_cfgCache && Date.now() - _cfgCacheAt < 30000) return _cfgCache;
-    try {
-      const res = await fetch(SHEET_URL);
-      const data = await res.json();
-      if (data && data.ok && data.config && Array.isArray(data.config.mentors) && data.config.mentors.length) {
-        _cfgCache = data.config;
-        _cfgCacheAt = Date.now();
-        return _cfgCache;
-      }
-    } catch (e) {
-      console.error("Настройки из таблицы недоступны, использую локальные:", e.message);
-    }
-  }
   return loadConfig();
 }
 
-// На Cloud Run локального диска нет — источник правды это Google Sheet.
-// Локальный файл используется только если SHEET_URL не задан (для разработки на маке).
-const useSheet = !!SHEET_URL;
-
-async function postSheet(payload) {
-  await fetch(SHEET_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-}
-
-// Все записи (из таблицы, либо из локального файла).
 async function getRegs() {
-  if (!useSheet) return loadRegs();
-  try {
-    const res = await fetch(SHEET_URL + "?action=list");
-    const data = await res.json();
-    if (data && data.ok && Array.isArray(data.list)) {
-      return data.list.map(r => ({
-        id: Number(r.id),
-        name: r.name,
-        mentor: r.mentor,
-        date: r.date,
-        sub: !!r.sub,
-        userId: r.userId ? Number(r.userId) : null,
-        username: r.username || "",
-        paid: !!r.paid,
-        claimed: !!r.claimed,
-        groupMsgId: r.groupMsgId ? Number(r.groupMsgId) : null,
-        ts: r.ts
-      }));
-    }
-  } catch (e) {
-    console.error("Список из таблицы недоступен:", e.message);
-  }
-  return [];
+  return loadRegs();
 }
 
 async function getReg(id) {
@@ -103,49 +130,34 @@ async function getReg(id) {
 
 // Создать новую запись.
 async function createReg(reg) {
-  if (useSheet) {
-    try { await postSheet(reg); }
-    catch (e) { console.error("Не удалось записать в таблицу:", e.message); }
-  } else {
-    const regs = loadRegs();
-    regs.push(reg);
-    saveRegs(regs);
-  }
+  const regs = loadRegs();
+  regs.push(reg);
+  saveRegs(regs);
 }
 
 // Обновить одно поле записи (оплата / заявил об оплате / message_id в группе).
 async function updateReg(id, field, value) {
-  if (useSheet) {
-    const actions = { paid: "setPaid", claimed: "setClaimed", groupMsgId: "setGroupMsg" };
-    try { await postSheet({ action: actions[field], id, [field]: value }); }
-    catch (e) { console.error("Не удалось обновить запись в таблице:", e.message); }
-  } else {
-    const regs = loadRegs();
-    const reg = regs.find(r => String(r.id) === String(id));
-    if (reg) { reg[field] = value; saveRegs(regs); }
-  }
+  const regs = loadRegs();
+  const reg = regs.find(r => String(r.id) === String(id));
+  if (reg) { reg[field] = value; saveRegs(regs); }
 }
 
 // Удалить запись целиком (выбранного участника).
 async function deleteReg(id) {
-  if (useSheet) {
-    try { await postSheet({ action: "delete", id }); }
-    catch (e) { console.error("Не удалось удалить запись из таблицы:", e.message); }
-  } else {
-    const regs = loadRegs().filter(r => String(r.id) !== String(id));
-    saveRegs(regs);
-  }
+  const regs = loadRegs().filter(r => String(r.id) !== String(id));
+  saveRegs(regs);
 }
 
 // ---------- bot ----------
 const bot = new Bot(BOT_TOKEN);
 const sessions = new Map(); // userId -> { step, draft }
+const adminModes = new Set(); // админский режим действует до /adminoff или перезапуска
 
-function choiceKeyboard(items, prefix) {
+function choiceKeyboard(items, prefix, onePerRow = false) {
   const k = new InlineKeyboard();
   items.forEach((item, i) => {
+    if (i > 0 && (onePerRow || i % 2 === 0)) k.row();
     k.text(item, prefix + ":" + i);
-    if ((i + 1) % 2 === 0) k.row();
   });
   return k;
 }
@@ -163,11 +175,15 @@ async function startRegistration(ctx) {
     await ctx.reply(`Чтобы записаться, напишите боту в личные сообщения: https://t.me/${ctx.me.username}`);
     return;
   }
+  if (isAdminMode(ctx.from)) {
+    await ctx.reply("Сейчас включён режим администратора. Чтобы записаться как пользователь, отправьте /adminoff.");
+    return;
+  }
   const cfg = await getConfig();
-  sessions.set(ctx.from.id, { step: "name", draft: {} });
+  sessions.set(ctx.from.id, { step: "city", draft: {} });
   await ctx.reply(
-    `Здравствуйте! Это запись на «${cfg.eventName}».\n\nНапишите вашу Фамилию и Имя:`,
-    { reply_markup: mainMenu }
+    `Здравствуйте! Это запись на «${cfg.eventName}».\n\nСначала выберите город:`,
+    { reply_markup: choiceKeyboard(cfg.cities, "city") }
   );
 }
 
@@ -190,7 +206,8 @@ async function buildListView(arg) {
     msg += `📋 ${day} (${list.length}):\n`;
     list.forEach((r, i) => {
       const pending = !r.sub && !r.paid && r.claimed ? " (ожидание оплаты)" : "";
-      msg += `${i + 1}. ${r.name} — ${r.mentor} — ${r.sub ? "абонемент" : "оплата"}${pending}\n`;
+      const route = [r.city, r.program, r.mentor].filter(Boolean).join(" — ");
+      msg += `${i + 1}. ${r.name}${route ? " — " + route : ""} — ${r.sub ? "абонемент" : "оплата"}${pending}\n`;
       kb.text(`🗑 ${r.name}`, `del:${r.id}`).row();
     });
     msg += "\n";
@@ -203,7 +220,7 @@ async function buildListView(arg) {
 async function showList(ctx, arg) {
   // В группе участникам не нужна клавиатура «Записаться» — заодно убираем залипшее меню.
   const menu = ctx.chat.type === "private" ? mainMenu : { remove_keyboard: true };
-  if (!(await isAdmin(ctx.from.id))) {
+  if (!isAdmin(ctx.from)) {
     await ctx.reply("📋 Список записавшихся доступен только администратору.", { reply_markup: menu });
     return;
   }
@@ -213,22 +230,57 @@ async function showList(ctx, arg) {
   await ctx.reply(view.text, { reply_markup: view.keyboard });
 }
 
-// Кто может отмечать оплату: указан в ADMIN_IDS ИЛИ состоит в группе (любой участник).
-async function isAdmin(userId) {
-  if (ADMIN_IDS.includes(String(userId))) return true;
-  if (GROUP_CHAT_ID) {
-    try {
-      const m = await bot.api.getChatMember(GROUP_CHAT_ID, userId);
-      // любой, кто реально в группе (не вышел и не удалён)
-      return m.status !== "left" && m.status !== "kicked";
-    } catch (e) { /* ignore */ }
-  }
+// Администраторы задаются только явным белым списком. Telegram ID надёжнее:
+// username можно поменять или передать другому аккаунту.
+function isAdmin(user) {
+  if (!user) return false;
+  const id = typeof user === "object" ? user.id : user;
+  const username = typeof user === "object" && user.username
+    ? user.username.replace(/^@/, "").toLowerCase()
+    : "";
+  const admins = loadAdmins();
+  return ADMIN_IDS.includes(String(id)) ||
+    admins.ids.includes(String(id)) ||
+    (!!username && (ADMIN_USERNAMES.includes(username) || admins.usernames.includes(username)));
+}
+
+function isAdminMode(user) {
+  if (!user || !adminModes.has(user.id)) return false;
+  if (isAdmin(user)) return true;
+  adminModes.delete(user.id);
   return false;
+}
+
+function parseAdminTarget(value) {
+  const raw = String(value || "").trim();
+  if (/^\d+$/.test(raw)) return { type: "id", value: raw };
+  const username = raw.replace(/^@/, "").toLowerCase();
+  if (/^[a-z0-9_]{5,32}$/.test(username)) return { type: "username", value: username };
+  return null;
+}
+
+function adminTargetLabel(target) {
+  return target.type === "id" ? `ID ${target.value}` : `@${target.value}`;
+}
+
+async function requireAdminCommandAccess(ctx) {
+  if (ctx.chat.type !== "private") {
+    await ctx.reply("Управлять администраторами можно только в личном чате с ботом.");
+    return false;
+  }
+  if (!isAdmin(ctx.from)) {
+    await ctx.reply("У вас нет прав для управления администраторами.");
+    return false;
+  }
+  return true;
 }
 
 // Текст уведомления о записи (для группы) с учётом статуса оплаты.
 function groupNoteText(reg, priceText) {
-  let t = `🔔 Запись\n${reg.name} → ${reg.date}\nНаставник: ${reg.mentor}`;
+  let t = `🔔 Запись\n${reg.name}`;
+  if (reg.city) t += `\nГород: ${reg.city}`;
+  if (reg.program) t += `\nНаправление: ${reg.program}`;
+  t += `\nДата: ${reg.date}\nНаставник: ${reg.mentor}`;
   if (reg.sub) {
     t += `\nУчастие: по абонементу (бесплатно)`;
   } else {
@@ -251,7 +303,7 @@ function payKeyboard(reg) {
 
 // Админ нажал кнопку оплаты в группе.
 async function handlePayToggle(ctx, data) {
-  if (!(await isAdmin(ctx.from.id))) {
+  if (!isAdmin(ctx.from)) {
     await ctx.answerCallbackQuery({ text: "Отмечать оплату может только администратор.", show_alert: true });
     return;
   }
@@ -277,9 +329,12 @@ async function handlePayToggle(ctx, data) {
   // сообщить записавшемуся
   if (paid && reg.userId) {
     try {
+      const booking = reg.program
+        ? `на «${reg.program}»${reg.city ? " (" + reg.city + ")" : ""}`
+        : `на «${reg.date}»`;
       await bot.api.sendMessage(
         reg.userId,
-        `✅ Ваша оплата подтверждена. Бронь на «${reg.date}» подтверждена. До встречи!`
+        `✅ Ваша оплата подтверждена. Бронь ${booking} подтверждена. До встречи!`
       );
       await bot.api.sendMessage(
         reg.userId,
@@ -324,7 +379,7 @@ async function handlePaidClaim(ctx, data) {
 
 // Админ нажал 🗑 у участника в списке — спрашиваем подтверждение.
 async function handleDeletePrompt(ctx, data) {
-  if (!(await isAdmin(ctx.from.id))) {
+  if (!isAdmin(ctx.from)) {
     await ctx.answerCallbackQuery({ text: "Удалять записи может только администратор.", show_alert: true });
     return;
   }
@@ -333,7 +388,7 @@ async function handleDeletePrompt(ctx, data) {
   const reg = await getReg(id);
   if (!reg) { await ctx.reply("Запись не найдена (возможно, уже удалена)."); return; }
   await ctx.reply(
-    `Удалить запись?\n${reg.name} — ${reg.date} — ${reg.mentor}`,
+    `Удалить запись?\n${[reg.name, reg.city, reg.program, reg.date, reg.mentor].filter(Boolean).join(" — ")}`,
     {
       reply_markup: new InlineKeyboard()
         .text("🗑 Да, удалить", `delok:${reg.id}`)
@@ -344,7 +399,7 @@ async function handleDeletePrompt(ctx, data) {
 
 // Админ подтвердил удаление — убираем запись и карточку из группы.
 async function handleDeleteConfirm(ctx, data) {
-  if (!(await isAdmin(ctx.from.id))) {
+  if (!isAdmin(ctx.from)) {
     await ctx.answerCallbackQuery({ text: "Удалять записи может только администратор.", show_alert: true });
     return;
   }
@@ -361,6 +416,91 @@ async function handleDeleteConfirm(ctx, data) {
 
 bot.command("start", (ctx) => startRegistration(ctx));
 
+bot.command("admin", async (ctx) => {
+  if (ctx.chat.type !== "private") {
+    await ctx.reply("Админ-панель открывается только в личном чате с ботом.");
+    return;
+  }
+  if (!isAdmin(ctx.from)) {
+    await ctx.reply("У вас нет доступа к админ-панели.");
+    return;
+  }
+  adminModes.add(ctx.from.id);
+  sessions.delete(ctx.from.id);
+
+  if (!/^https:\/\//i.test(ADMIN_WEBAPP_URL)) {
+    await ctx.reply(
+      "Режим администратора включён, но веб-панель пока не подключена. " +
+      "Укажите её HTTPS-адрес в ADMIN_WEBAPP_URL. Для выхода отправьте /adminoff."
+    );
+    return;
+  }
+
+  await ctx.reply(
+    "Режим администратора включён. Здесь можно менять все настройки бота. Для выхода отправьте /adminoff.",
+    { reply_markup: new InlineKeyboard().webApp("⚙️ Открыть админ-панель", ADMIN_WEBAPP_URL) }
+  );
+});
+
+bot.command("adminoff", async (ctx) => {
+  adminModes.delete(ctx.from.id);
+  sessions.delete(ctx.from.id);
+  await ctx.reply("Режим администратора выключен. Теперь бот работает для вас как обычно.", {
+    reply_markup: ctx.chat.type === "private" ? mainMenu : { remove_keyboard: true }
+  });
+});
+
+bot.command("addadmin", async (ctx) => {
+  if (!(await requireAdminCommandAccess(ctx))) return;
+  const target = parseAdminTarget(ctx.match);
+  if (!target) {
+    await ctx.reply("Укажите Telegram ID или username.\n\nПримеры:\n/addadmin 123456789\n/addadmin @username");
+    return;
+  }
+
+  const admins = loadAdmins();
+  const key = target.type === "id" ? "ids" : "usernames";
+  const protectedList = target.type === "id" ? ADMIN_IDS : ADMIN_USERNAMES;
+  if (admins[key].includes(target.value) || protectedList.includes(target.value)) {
+    await ctx.reply(`${adminTargetLabel(target)} уже является администратором.`);
+    return;
+  }
+
+  admins[key].push(target.value);
+  saveAdmins(admins);
+  await ctx.reply(
+    `✅ ${adminTargetLabel(target)} добавлен в администраторы.` +
+    (target.type === "username" ? "\nДля более надёжного доступа лучше добавить Telegram ID." : "")
+  );
+});
+
+bot.command("kickadmin", async (ctx) => {
+  if (!(await requireAdminCommandAccess(ctx))) return;
+  const target = parseAdminTarget(ctx.match);
+  if (!target) {
+    await ctx.reply("Укажите Telegram ID или username.\n\nПримеры:\n/kickadmin 123456789\n/kickadmin @username");
+    return;
+  }
+
+  const protectedList = target.type === "id" ? ADMIN_IDS : ADMIN_USERNAMES;
+  if (protectedList.includes(target.value)) {
+    await ctx.reply(`${adminTargetLabel(target)} задан в настройках сервера и защищён от удаления.`);
+    return;
+  }
+
+  const admins = loadAdmins();
+  const key = target.type === "id" ? "ids" : "usernames";
+  const before = admins[key].length;
+  admins[key] = admins[key].filter(value => value !== target.value);
+  if (admins[key].length === before) {
+    await ctx.reply(`${adminTargetLabel(target)} не найден в изменяемом списке администраторов.`);
+    return;
+  }
+
+  saveAdmins(admins);
+  await ctx.reply(`✅ ${adminTargetLabel(target)} удалён из администраторов.`);
+});
+
 // Помощник: узнать chat_id (для группы) и свой user id.
 bot.command("id", async (ctx) => {
   await ctx.reply(`chat_id: ${ctx.chat.id}\nваш user id: ${ctx.from.id}`);
@@ -371,7 +511,7 @@ bot.command("list", async (ctx) => {
   await showList(ctx, (ctx.match || "").trim());
 });
 
-// Текст: кнопки меню или ввод имени (шаг 1)
+// Текст: кнопки меню или ввод имени (после выбора города и направления)
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
 
@@ -381,6 +521,11 @@ bot.on("message:text", async (ctx) => {
 
   // Ввод анкеты (Фамилия Имя) принимаем только в личном чате.
   if (ctx.chat.type !== "private") return;
+
+  if (isAdminMode(ctx.from)) {
+    await ctx.reply("Вы в режиме администратора. Откройте панель через /admin или отправьте /adminoff для обычного режима.");
+    return;
+  }
 
   const s = sessions.get(ctx.from.id);
   if (!s) { await ctx.reply("Нажмите «📝 Записаться», чтобы оформить заявку.", { reply_markup: mainMenu }); return; }
@@ -393,7 +538,7 @@ bot.on("message:text", async (ctx) => {
   await ctx.reply("Выберите наставника:", { reply_markup: choiceKeyboard(cfg.mentors, "mentor") });
 });
 
-// Шаги 2–4: кнопки
+// Шаги анкеты с кнопками
 bot.on("callback_query:data", async (ctx) => {
   const data = ctx.callbackQuery.data;
   if (data.startsWith("pay:")) return handlePayToggle(ctx, data);
@@ -406,8 +551,13 @@ bot.on("callback_query:data", async (ctx) => {
   }
   if (data.startsWith("del:")) return handleDeletePrompt(ctx, data);
 
-  // Шаги анкеты (наставник/дата/абонемент) — только в личном чате.
+  // Шаги анкеты — только в личном чате.
   if (ctx.chat.type !== "private") { await ctx.answerCallbackQuery(); return; }
+
+  if (isAdminMode(ctx.from)) {
+    await ctx.answerCallbackQuery({ text: "Сначала выключите режим администратора: /adminoff", show_alert: true });
+    return;
+  }
 
   await ctx.answerCallbackQuery();
   const s = sessions.get(ctx.from.id);
@@ -417,13 +567,27 @@ bot.on("callback_query:data", async (ctx) => {
 
   if (!s) { await ctx.reply("Нажмите «📝 Записаться», чтобы начать.", { reply_markup: mainMenu }); return; }
 
-  if (type === "mentor" && s.step === "mentor") {
+  if (type === "city" && s.step === "city" && cfg.cities[idx]) {
+    s.draft.city = cfg.cities[idx];
+    s.step = "program";
+    await ctx.editMessageText(`Город: ${s.draft.city}`);
+    await ctx.reply("Выберите направление:", {
+      reply_markup: choiceKeyboard(cfg.programs, "program", true)
+    });
+
+  } else if (type === "program" && s.step === "program" && cfg.programs[idx]) {
+    s.draft.program = cfg.programs[idx];
+    s.step = "name";
+    await ctx.editMessageText(`Направление: ${s.draft.program}`);
+    await ctx.reply("Напишите вашу Фамилию и Имя:", { reply_markup: mainMenu });
+
+  } else if (type === "mentor" && s.step === "mentor" && cfg.mentors[idx]) {
     s.draft.mentor = cfg.mentors[idx];
     s.step = "date";
     await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
     await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(cfg.dates, "date") });
 
-  } else if (type === "date" && s.step === "date") {
+  } else if (type === "date" && s.step === "date" && cfg.dates[idx]) {
     s.draft.date = cfg.dates[idx];
     s.step = "sub";
     await ctx.editMessageText(`Дата: ${s.draft.date}`);
@@ -443,6 +607,8 @@ async function finish(ctx, draft) {
   const reg = {
     id: Date.now(),
     name: draft.name,
+    city: draft.city,
+    program: draft.program,
     mentor: draft.mentor,
     date: draft.date,
     sub: draft.sub,
@@ -482,7 +648,11 @@ async function setupBotMeta() {
   try {
     await bot.api.setMyCommands([
       { command: "start", description: "📝 Записаться на мероприятие" },
-      { command: "list", description: "📋 Список записавшихся" }
+      { command: "list", description: "📋 Список записавшихся" },
+      { command: "admin", description: "⚙️ Включить режим администратора" },
+      { command: "adminoff", description: "🚪 Выключить режим администратора" },
+      { command: "addadmin", description: "➕ Добавить администратора" },
+      { command: "kickadmin", description: "➖ Удалить администратора" }
     ]);
     const cfg = await getConfig();
     await bot.api.setMyDescription(
@@ -493,26 +663,176 @@ async function setupBotMeta() {
   }
 }
 
-(async () => {
-  if (WEBHOOK_URL) {
-    // Режим Cloud Run: HTTP-сервер + webhook. ctx.me нужен синхронно, поэтому init() заранее.
-    await bot.init();
-    await setupBotMeta();
-    const handle = webhookCallback(bot, "http", { secretToken: WEBHOOK_SECRET });
-    const server = http.createServer(async (req, res) => {
-      if (req.method === "POST" && req.url === WEBHOOK_PATH) {
-        try {
-          await handle(req, res);
-        } catch (e) {
-          console.error("Ошибка webhook:", e.message);
-          if (!res.headersSent) { res.statusCode = 500; res.end(); }
-        }
-      } else {
-        res.statusCode = 200; res.end("ok"); // health check для Cloud Run
-      }
+function sendJson(res, status, payload) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  });
+  res.end(JSON.stringify(payload));
+}
+
+function readRequestJson(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", chunk => {
+      body += chunk;
+      if (body.length > 64 * 1024) reject(new Error("Слишком большой запрос"));
     });
-    server.listen(PORT, async () => {
-      console.log(`✓ HTTP-сервер слушает порт ${PORT}`);
+    req.on("end", () => {
+      try { resolve(body ? JSON.parse(body) : {}); }
+      catch (e) { reject(new Error("Некорректный JSON")); }
+    });
+    req.on("error", reject);
+  });
+}
+
+// Проверка initData по алгоритму Telegram Web Apps. Клиентский user.id никогда
+// не используется без этой подписи.
+function validateTelegramInitData(initData) {
+  if (!initData || typeof initData !== "string") return null;
+  const params = new URLSearchParams(initData);
+  const receivedHash = params.get("hash");
+  if (!receivedHash || !/^[a-f0-9]{64}$/i.test(receivedHash)) return null;
+  params.delete("hash");
+
+  const checkString = [...params.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+  const secretKey = crypto.createHmac("sha256", "WebAppData").update(BOT_TOKEN).digest();
+  const expectedHash = crypto.createHmac("sha256", secretKey).update(checkString).digest("hex");
+  const received = Buffer.from(receivedHash, "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) return null;
+
+  const authDate = Number(params.get("auth_date"));
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(authDate) || authDate > now + 300 || now - authDate > 24 * 60 * 60) return null;
+
+  try {
+    const user = JSON.parse(params.get("user") || "null");
+    return user && user.id ? user : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function authenticateAdminRequest(req) {
+  const user = validateTelegramInitData(req.headers["x-telegram-init-data"]);
+  if (!user || !isAdmin(user) || !adminModes.has(Number(user.id))) return null;
+  return user;
+}
+
+function sanitizeConfigInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Некорректные настройки");
+  const listKeys = ["cities", "programs", "dates", "mentors"];
+  const result = {};
+
+  listKeys.forEach(key => {
+    if (!Array.isArray(input[key])) throw new Error(`Поле «${key}» должно быть списком`);
+    const values = [...new Set(input[key].map(value => String(value).trim()).filter(Boolean))];
+    if (!values.length) throw new Error("В каждом разделе нужен хотя бы один вариант");
+    if (values.length > 40 || values.some(value => value.length > 120)) throw new Error("Слишком много вариантов или слишком длинный текст");
+    result[key] = values;
+  });
+
+  result.eventName = String(input.eventName || "").trim();
+  result.price = String(input.price || "").trim();
+  result.payDetails = String(input.payDetails || "").trim();
+  if (!result.eventName) throw new Error("Укажите название мероприятия");
+  if (result.eventName.length > 120 || result.price.length > 80 || result.payDetails.length > 1200) {
+    throw new Error("Одно из полей содержит слишком длинный текст");
+  }
+  return result;
+}
+
+async function handleHttpRequest(req, res, webhookHandle) {
+  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+
+  if (req.method === "POST" && pathname === WEBHOOK_PATH && webhookHandle) {
+    try {
+      await webhookHandle(req, res);
+    } catch (e) {
+      console.error("Ошибка webhook:", e.message);
+      if (!res.headersSent) sendJson(res, 500, { ok: false });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && (pathname === "/admin" || pathname === "/admin/")) {
+    try {
+      const html = fs.readFileSync(ADMIN_HTML_PATH);
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer"
+      });
+      res.end(html);
+    } catch (e) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Админ-панель недоступна");
+    }
+    return;
+  }
+
+  if (pathname === "/api/admin/config") {
+    const admin = authenticateAdminRequest(req);
+    if (!admin) {
+      sendJson(res, 403, { ok: false, error: "Доступ не подтверждён" });
+      return;
+    }
+
+    if (req.method === "GET") {
+      sendJson(res, 200, { ok: true, config: loadConfig() });
+      return;
+    }
+
+    if (req.method === "PUT") {
+      try {
+        const input = await readRequestJson(req);
+        const config = saveConfig(sanitizeConfigInput(input));
+        console.log(`✓ Настройки обновил администратор ${admin.id}${admin.username ? " (@" + admin.username + ")" : ""}`);
+        setupBotMeta().catch(e => console.error("Не удалось обновить описание бота:", e.message));
+        sendJson(res, 200, { ok: true, config });
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: e.message });
+      }
+      return;
+    }
+
+    sendJson(res, 405, { ok: false, error: "Метод не поддерживается" });
+    return;
+  }
+
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("ok");
+}
+
+async function startApp() {
+  await bot.init();
+  await setupBotMeta();
+  let webhookHandle = null;
+
+  if (WEBHOOK_URL) {
+    webhookHandle = webhookCallback(bot, "http", { secretToken: WEBHOOK_SECRET });
+  } else {
+    await bot.api.deleteWebhook().catch(() => {});
+    bot.start();
+    console.log("✓ Бот запущен (long-polling). Меню и кнопки активны.");
+  }
+
+  const server = http.createServer((req, res) => {
+    handleHttpRequest(req, res, webhookHandle).catch(error => {
+      console.error("Ошибка HTTP-сервера:", error.message);
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: "Внутренняя ошибка" });
+    });
+  });
+  server.listen(PORT, async () => {
+    console.log(`✓ HTTP-сервер и админ-панель слушают порт ${PORT}`);
+    if (WEBHOOK_URL) {
       try {
         const url = WEBHOOK_URL.replace(/\/$/, "") + WEBHOOK_PATH;
         await bot.api.setWebhook(url, { secret_token: WEBHOOK_SECRET });
@@ -520,12 +840,21 @@ async function setupBotMeta() {
       } catch (e) {
         console.error("Не удалось установить webhook:", e.message);
       }
-    });
-  } else {
-    // Локальная разработка: long-polling.
-    await bot.api.deleteWebhook().catch(() => {});
-    await setupBotMeta();
-    bot.start();
-    console.log("✓ Бот запущен (long-polling). Меню и кнопки активны.");
-  }
-})();
+    }
+  });
+}
+
+if (require.main === module) {
+  startApp().catch(error => {
+    console.error("Не удалось запустить бота:", error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  isAdmin,
+  normalizeConfig,
+  parseAdminTarget,
+  sanitizeConfigInput,
+  validateTelegramInitData
+};
