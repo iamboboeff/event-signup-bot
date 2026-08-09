@@ -13,6 +13,8 @@ process.env.DATA_DIR = testDataDir;
 after(() => fs.rmSync(testDataDir, { recursive: true, force: true }));
 
 const {
+  ADMIN_BOT_COMMANDS,
+  PUBLIC_BOT_COMMANDS,
   isAdmin,
   parseAdminTarget,
   sanitizeConfigInput,
@@ -54,6 +56,12 @@ test("admin command targets accept Telegram IDs and usernames", () => {
   assert.equal(parseAdminTarget("not a username"), null);
 });
 
+test("ordinary Telegram menu exposes only registration", () => {
+  assert.deepEqual(PUBLIC_BOT_COMMANDS.map(item => item.command), ["start"]);
+  assert.equal(ADMIN_BOT_COMMANDS.some(item => item.command === "admin"), true);
+  assert.equal(ADMIN_BOT_COMMANDS.some(item => item.command === "addadmin"), true);
+});
+
 test("admin config is trimmed, deduplicated and validated", () => {
   const config = sanitizeConfigInput({
     eventName: " Новое событие ",
@@ -71,6 +79,8 @@ test("admin config is trimmed, deduplicated and validated", () => {
 
 test("admin page contains valid inline JavaScript", () => {
   const html = fs.readFileSync("admin.html", "utf8");
+  assert.match(html, /id="brandGate"/);
+  assert.doesNotMatch(html, /Откройте панель заново/);
   const scripts = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
     .map(match => match[1])
     .filter(source => source.trim());

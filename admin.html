@@ -3,131 +3,505 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Админ-панель бота</title>
+  <title>Управление записью</title>
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
   <style>
     :root {
       color-scheme: light dark;
-      --bg: var(--tg-theme-secondary-bg-color, #f3f1f7);
-      --card: var(--tg-theme-bg-color, #ffffff);
-      --text: var(--tg-theme-text-color, #201b2c);
-      --hint: var(--tg-theme-hint-color, #77717e);
-      --accent: var(--tg-theme-button-color, #6f4dbf);
+      --page: var(--tg-theme-secondary-bg-color, #f4f2f8);
+      --surface: var(--tg-theme-bg-color, #ffffff);
+      --surface-soft: color-mix(in srgb, var(--surface) 84%, var(--page));
+      --text: var(--tg-theme-text-color, #211b2d);
+      --muted: var(--tg-theme-hint-color, #756f7d);
+      --accent: var(--tg-theme-button-color, #7252b9);
       --accent-text: var(--tg-theme-button-text-color, #ffffff);
-      --line: color-mix(in srgb, var(--hint) 22%, transparent);
-      --danger: #d95050;
-      --success: #25845f;
+      --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--surface));
+      --line: color-mix(in srgb, var(--muted) 20%, transparent);
+      --danger: #cf4d58;
+      --danger-soft: color-mix(in srgb, var(--danger) 11%, var(--surface));
+      --success: #24805e;
+      --success-soft: color-mix(in srgb, var(--success) 12%, var(--surface));
+      --warning: #bb7819;
+      --shadow: 0 18px 50px rgba(36, 27, 52, .08);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
+
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+    html { background: var(--page); }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 90% -5%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 32%),
+        var(--page);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
     button, input, textarea { font: inherit; }
-    .shell { width: min(760px, 100%); margin: 0 auto; padding: 20px 14px calc(110px + env(safe-area-inset-bottom)); }
-    header { padding: 8px 4px 18px; }
-    .eyebrow { margin: 0 0 5px; color: var(--accent); font-size: 12px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(25px, 7vw, 36px); line-height: 1.08; letter-spacing: -.03em; }
-    .intro { margin: 10px 0 0; color: var(--hint); line-height: 1.45; font-size: 14px; }
-    .identity { display: inline-flex; align-items: center; gap: 7px; margin-top: 12px; padding: 7px 10px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 11%, var(--card)); font-size: 12px; font-weight: 650; }
-    .identity::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+    button { -webkit-tap-highlight-color: transparent; }
+
+    .brand-gate {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 28px;
+      background: #ffffff;
+    }
+    .brand-logo-wrap {
+      position: relative;
+      display: grid;
+      width: min(420px, 88vw);
+      aspect-ratio: 16 / 9;
+      place-items: center;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .brand-logo {
+      position: relative;
+      z-index: 1;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #ffffff;
+    }
+    .brand-logo-fallback {
+      position: absolute;
+      color: #5f4778;
+      font-size: clamp(36px, 13vw, 72px);
+      font-weight: 400;
+      letter-spacing: -.055em;
+    }
+
+    .shell {
+      width: min(820px, 100%);
+      margin: 0 auto;
+      padding: 14px 14px calc(126px + env(safe-area-inset-bottom));
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 14px;
+      padding: 18px;
+      border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+      border-radius: 24px;
+      background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 10%, var(--surface)), var(--surface) 55%);
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 160px;
+      height: 160px;
+      right: -74px;
+      bottom: -92px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--accent) 13%, transparent);
+      pointer-events: none;
+    }
+    .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 800; letter-spacing: .02em; }
+    .brand-mark {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border-radius: 10px;
+      background: var(--accent);
+      color: var(--accent-text);
+      box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+    .identity {
+      display: inline-flex;
+      max-width: 58%;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: var(--success-soft);
+      color: var(--success);
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .identity::before { content: ""; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .eyebrow { margin: 22px 0 6px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 580px; font-size: clamp(28px, 7.5vw, 42px); line-height: 1.03; letter-spacing: -.045em; }
+    .intro { max-width: 610px; margin: 11px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .hero-note {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 15px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: color-mix(in srgb, var(--surface) 80%, transparent);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+    .hero-note strong { color: var(--text); }
+
+    .panel {
+      margin-bottom: 14px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 21px;
+      background: var(--surface);
+      box-shadow: 0 8px 26px rgba(36, 27, 52, .045);
+    }
+    .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
+    .panel-title { display: flex; align-items: flex-start; gap: 11px; }
+    .panel-icon {
+      display: grid;
+      flex: 0 0 auto;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--accent-soft);
+      font-size: 18px;
+    }
+    h2 { margin: 0; font-size: 17px; line-height: 1.2; letter-spacing: -.015em; }
+    .panel-description { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .count {
+      flex: 0 0 auto;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .flow { overflow: hidden; }
+    .flow-track {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(92px, 1fr));
+      gap: 7px;
+      overflow-x: auto;
+      padding: 2px 1px 5px;
+      scrollbar-width: none;
+    }
+    .flow-track::-webkit-scrollbar { display: none; }
+    .flow-step {
+      position: relative;
+      min-width: 92px;
+      padding: 11px 10px 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-soft);
+    }
+    .flow-number { color: var(--accent); font-size: 10px; font-weight: 850; }
+    .flow-label { display: block; margin-top: 13px; font-size: 12px; font-weight: 780; }
+    .flow-value { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+
+    .section-heading { margin: 24px 4px 12px; }
+    .section-heading h2 { font-size: 20px; }
+    .section-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
     .grid { display: grid; gap: 12px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 17px; box-shadow: 0 8px 24px rgba(32, 27, 44, .045); }
-    .card h2 { margin: 0 0 4px; font-size: 17px; letter-spacing: -.01em; }
-    .card-note { margin: 0 0 15px; color: var(--hint); font-size: 12px; line-height: 1.4; }
-    .field { margin-top: 13px; }
-    label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 700; color: var(--hint); }
+    .wide { grid-column: 1 / -1; }
+
+    .fields { display: grid; gap: 13px; }
+    .field label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; font-size: 12px; font-weight: 760; }
+    .field-hint { color: var(--muted); font-size: 10px; font-weight: 500; }
     input, textarea {
-      width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px;
-      background: var(--bg); color: var(--text); outline: none;
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      padding: 12px 13px;
+      background: var(--surface-soft);
+      color: var(--text);
+      outline: none;
+      transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
     }
-    textarea { min-height: 92px; resize: vertical; line-height: 1.4; }
-    input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+    input::placeholder, textarea::placeholder { color: color-mix(in srgb, var(--muted) 70%, transparent); }
+    textarea { min-height: 104px; resize: vertical; line-height: 1.45; }
+    input:focus, textarea:focus {
+      border-color: var(--accent);
+      background: var(--surface);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
+    }
+
     .items { display: grid; gap: 8px; }
-    .item { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
-    .item-actions { display: flex; gap: 4px; }
+    .item {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      gap: 7px;
+      align-items: center;
+    }
+    .item-index {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 850;
+    }
+    .item input { min-width: 0; padding: 10px 11px; }
+    .item-actions { display: flex; gap: 3px; }
     .icon-btn {
-      width: 36px; height: 36px; border: 0; border-radius: 10px; color: var(--hint);
-      background: var(--bg); cursor: pointer; font-weight: 800;
+      display: grid;
+      width: 33px;
+      height: 33px;
+      place-items: center;
+      border: 0;
+      border-radius: 10px;
+      background: var(--surface-soft);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 850;
     }
-    .icon-btn.danger { color: var(--danger); }
-    .add-btn { width: 100%; margin-top: 10px; border: 1px dashed var(--accent); border-radius: 12px; padding: 10px; background: transparent; color: var(--accent); font-weight: 750; cursor: pointer; }
+    .icon-btn:active { transform: scale(.94); }
+    .icon-btn:disabled { opacity: .28; cursor: default; transform: none; }
+    .icon-btn.danger { background: var(--danger-soft); color: var(--danger); }
+    .add-btn {
+      width: 100%;
+      margin-top: 11px;
+      border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: transparent;
+      color: var(--accent);
+      font-weight: 780;
+      cursor: pointer;
+    }
+    .add-btn:active { background: var(--accent-soft); }
+
+    .access {
+      display: grid;
+      gap: 12px;
+    }
+    .command-list { display: grid; gap: 8px; }
+    .command-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 11px;
+      border-radius: 12px;
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    code { padding: 5px 7px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 750; }
+    .access-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+    .loading {
+      display: grid;
+      min-height: 180px;
+      place-items: center;
+      padding: 30px;
+      border: 1px solid var(--line);
+      border-radius: 21px;
+      background: var(--surface);
+      color: var(--muted);
+      text-align: center;
+    }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 12px;
+      border: 3px solid var(--accent-soft);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     .savebar {
-      position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; padding: 12px max(14px, calc((100vw - 760px) / 2 + 14px)) calc(12px + env(safe-area-inset-bottom));
-      background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(16px); border-top: 1px solid var(--line);
+      position: fixed;
+      z-index: 20;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 10px max(14px, calc((100vw - 820px) / 2 + 14px)) calc(10px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 92%, transparent);
+      backdrop-filter: blur(18px);
     }
-    .save { width: 100%; border: 0; border-radius: 14px; padding: 13px 16px; background: var(--accent); color: var(--accent-text); font-weight: 800; cursor: pointer; }
-    .save:disabled { opacity: .55; cursor: wait; }
-    .status { min-height: 18px; margin: 7px 2px 0; text-align: center; font-size: 12px; color: var(--hint); }
-    .status.ok { color: var(--success); }
-    .status.error { color: var(--danger); }
-    .loading { padding: 44px 10px; text-align: center; color: var(--hint); }
+    .savebar-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .save-state { display: grid; grid-template-columns: 9px 1fr; gap: 8px; align-items: center; min-width: 0; }
+    .state-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px var(--success-soft); }
+    .savebar[data-state="dirty"] .state-dot { background: var(--warning); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 12%, transparent); }
+    .savebar[data-state="error"] .state-dot { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); }
+    .state-copy { min-width: 0; }
+    .state-title { display: block; font-size: 12px; font-weight: 800; }
+    .status { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .save {
+      flex: 0 0 auto;
+      min-width: 154px;
+      border: 0;
+      border-radius: 13px;
+      padding: 11px 15px;
+      background: var(--accent);
+      color: var(--accent-text);
+      box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 25%, transparent);
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .save:disabled { opacity: .42; cursor: default; box-shadow: none; }
     .hidden { display: none !important; }
-    @media (min-width: 650px) {
+
+    @media (min-width: 670px) {
+      .shell { padding-top: 24px; }
+      .hero, .panel { padding: 22px; }
       .grid { grid-template-columns: 1fr 1fr; }
-      .card.wide { grid-column: 1 / -1; }
+      .fields { grid-template-columns: 1fr 1fr; }
+      .field.full { grid-column: 1 / -1; }
+      .access { grid-template-columns: 1fr 1fr; align-items: start; }
+    }
+
+    @media (max-width: 420px) {
+      .shell { padding-left: 10px; padding-right: 10px; }
+      .hero, .panel { padding: 15px; border-radius: 19px; }
+      .identity { max-width: 54%; }
+      .item { grid-template-columns: 22px minmax(0, 1fr); }
+      .item-actions { grid-column: 2; justify-content: flex-end; margin-top: -2px; }
+      .icon-btn { width: 38px; height: 30px; }
+      .save { min-width: 132px; }
     }
   </style>
 </head>
 <body>
-  <main class="shell">
-    <header>
-      <p class="eyebrow">Управление ботом</p>
-      <h1>Настройки записи</h1>
-      <p class="intro">Изменения сразу появятся в новых анкетах. Уже оформленные заявки останутся без изменений.</p>
-      <div id="identity" class="identity">Проверяем доступ…</div>
+  <div id="brandGate" class="brand-gate">
+    <div class="brand-logo-wrap">
+      <span class="brand-logo-fallback">dōTERRA</span>
+      <img class="brand-logo" src="https://s3-us-west-2.amazonaws.com/hybrisproduction/Imagery/USA-English/16x9_1000x562_official_doterra_corporate_logo_us_web_english.jpg" alt="dōTERRA">
+    </div>
+  </div>
+
+  <main id="adminShell" class="shell hidden">
+    <header class="hero">
+      <div class="hero-top">
+        <div class="brand"><span class="brand-mark">✦</span><span>Админ-панель</span></div>
+        <div id="identity" class="identity">Проверяем доступ…</div>
+      </div>
+      <p class="eyebrow">Управление записью</p>
+      <h1>Всё, что увидит участник в боте</h1>
+      <p class="intro">Настройте название, варианты выбора и оплату. После сохранения новые данные сразу появятся в следующих анкетах.</p>
+      <div class="hero-note"><span>ⓘ</span><span><strong>Уже созданные заявки не изменятся.</strong> Обновления действуют только для новых записей.</span></div>
     </header>
 
-    <div id="loading" class="loading">Загружаем настройки…</div>
-    <section id="form" class="grid hidden">
-      <article class="card wide">
-        <h2>Основное</h2>
-        <p class="card-note">Название события и условия участия.</p>
-        <div class="field">
-          <label for="eventName">Название мероприятия</label>
-          <input id="eventName" maxlength="120" autocomplete="off">
+    <div id="loading" class="loading">
+      <div><div class="spinner"></div><span>Загружаем настройки…</span></div>
+    </div>
+
+    <div id="form" class="hidden">
+      <section class="panel flow" aria-labelledby="flow-title">
+        <div class="panel-heading">
+          <div class="panel-title">
+            <div class="panel-icon">🧭</div>
+            <div><h2 id="flow-title">Путь участника</h2><p class="panel-description">Так выглядит порядок вопросов в боте.</p></div>
+          </div>
         </div>
-        <div class="field">
-          <label for="price">Стоимость</label>
-          <input id="price" maxlength="80" autocomplete="off">
+        <div class="flow-track">
+          <div class="flow-step"><span class="flow-number">01</span><span class="flow-label">Город</span><span class="flow-value" data-flow-value="cities">—</span></div>
+          <div class="flow-step"><span class="flow-number">02</span><span class="flow-label">Направление</span><span class="flow-value" data-flow-value="programs">—</span></div>
+          <div class="flow-step"><span class="flow-number">03</span><span class="flow-label">Имя</span><span class="flow-value">ввод текстом</span></div>
+          <div class="flow-step"><span class="flow-number">04</span><span class="flow-label">Наставник</span><span class="flow-value" data-flow-value="mentors">—</span></div>
+          <div class="flow-step"><span class="flow-number">05</span><span class="flow-label">Дата</span><span class="flow-value" data-flow-value="dates">—</span></div>
+          <div class="flow-step"><span class="flow-number">06</span><span class="flow-label">Участие</span><span class="flow-value">абонемент / оплата</span></div>
         </div>
-        <div class="field">
-          <label for="payDetails">Реквизиты и инструкция по оплате</label>
-          <textarea id="payDetails" maxlength="1200"></textarea>
+      </section>
+
+      <div class="section-heading"><h2>Основные данные</h2><p>Название и информация об оплате показываются участнику в сообщениях бота.</p></div>
+      <section class="panel" aria-labelledby="main-title">
+        <div class="panel-heading">
+          <div class="panel-title">
+            <div class="panel-icon">✏️</div>
+            <div><h2 id="main-title">О мероприятии</h2><p class="panel-description">Общая информация для всех направлений.</p></div>
+          </div>
         </div>
-      </article>
+        <div class="fields">
+          <div class="field full">
+            <label for="eventName"><span>Название мероприятия</span><span class="field-hint">до 120 символов</span></label>
+            <input id="eventName" maxlength="120" autocomplete="off" placeholder="Например, Клуб счастливых привычек">
+          </div>
+          <div class="field">
+            <label for="price"><span>Стоимость участия</span><span class="field-hint">как увидит участник</span></label>
+            <input id="price" maxlength="80" autocomplete="off" placeholder="Например, 1 500 ₽">
+          </div>
+          <div class="field full">
+            <label for="payDetails"><span>Как оплатить</span><span class="field-hint">реквизиты и пояснение</span></label>
+            <textarea id="payDetails" maxlength="1200" placeholder="Напишите реквизиты и короткую инструкцию по оплате"></textarea>
+          </div>
+        </div>
+      </section>
 
-      <article class="card" data-list-card="cities">
-        <h2>Города</h2>
-        <p class="card-note">Первый шаг анкеты.</p>
-        <div class="items"></div>
-        <button class="add-btn" type="button">＋ Добавить город</button>
-      </article>
+      <div class="section-heading"><h2>Варианты ответов</h2><p>Меняйте текст прямо в строке. Стрелки определяют порядок кнопок в боте.</p></div>
+      <div class="grid">
+        <section class="panel" data-list-card="cities" data-placeholder="Название города">
+          <div class="panel-heading">
+            <div class="panel-title"><div class="panel-icon">📍</div><div><h2>Города</h2><p class="panel-description">Первый выбор участника.</p></div></div>
+            <span class="count" data-count-for="cities">—</span>
+          </div>
+          <div class="items"></div>
+          <button class="add-btn" type="button">＋ Добавить город</button>
+        </section>
 
-      <article class="card" data-list-card="programs">
-        <h2>Направления</h2>
-        <p class="card-note">Занятия и мероприятия после выбора города.</p>
-        <div class="items"></div>
-        <button class="add-btn" type="button">＋ Добавить направление</button>
-      </article>
+        <section class="panel" data-list-card="programs" data-placeholder="Название направления">
+          <div class="panel-heading">
+            <div class="panel-title"><div class="panel-icon">🌿</div><div><h2>Направления</h2><p class="panel-description">Занятия и мероприятия.</p></div></div>
+            <span class="count" data-count-for="programs">—</span>
+          </div>
+          <div class="items"></div>
+          <button class="add-btn" type="button">＋ Добавить направление</button>
+        </section>
 
-      <article class="card" data-list-card="dates">
-        <h2>Даты</h2>
-        <p class="card-note">Доступные варианты даты или дня.</p>
-        <div class="items"></div>
-        <button class="add-btn" type="button">＋ Добавить дату</button>
-      </article>
+        <section class="panel" data-list-card="mentors" data-placeholder="Имя наставника">
+          <div class="panel-heading">
+            <div class="panel-title"><div class="panel-icon">🤝</div><div><h2>Наставники</h2><p class="panel-description">К кому записывается участник.</p></div></div>
+            <span class="count" data-count-for="mentors">—</span>
+          </div>
+          <div class="items"></div>
+          <button class="add-btn" type="button">＋ Добавить наставника</button>
+        </section>
 
-      <article class="card" data-list-card="mentors">
-        <h2>Наставники</h2>
-        <p class="card-note">Список наставников для записи.</p>
-        <div class="items"></div>
-        <button class="add-btn" type="button">＋ Добавить наставника</button>
-      </article>
-    </section>
+        <section class="panel" data-list-card="dates" data-placeholder="Дата или день недели">
+          <div class="panel-heading">
+            <div class="panel-title"><div class="panel-icon">🗓️</div><div><h2>Даты</h2><p class="panel-description">Доступные дни записи.</p></div></div>
+            <span class="count" data-count-for="dates">—</span>
+          </div>
+          <div class="items"></div>
+          <button class="add-btn" type="button">＋ Добавить дату</button>
+        </section>
+      </div>
+
+      <div class="section-heading"><h2>Доступ к управлению</h2><p>Эти команды работают только у действующих администраторов в личном чате с ботом.</p></div>
+      <section class="panel access" aria-labelledby="access-title">
+        <div>
+          <div class="panel-title"><div class="panel-icon">🔐</div><div><h2 id="access-title">Администраторы</h2><p class="panel-description">Добавляйте по ID или username.</p></div></div>
+          <p class="access-note" style="margin-top:14px">Telegram ID надёжнее username: имя пользователя можно изменить. Для обычной записи выключите режим командой <code>/adminoff</code>.</p>
+        </div>
+        <div class="command-list">
+          <div class="command-row"><code>/addadmin</code><span>добавить администратора</span></div>
+          <div class="command-row"><code>/kickadmin</code><span>удалить администратора</span></div>
+        </div>
+      </section>
+    </div>
   </main>
 
-  <div id="savebar" class="savebar hidden">
-    <button id="save" class="save" type="button">Сохранить изменения</button>
-    <div id="status" class="status"></div>
+  <div id="savebar" class="savebar hidden" data-state="clean">
+    <div class="savebar-inner">
+      <div class="save-state">
+        <span class="state-dot"></span>
+        <span class="state-copy"><strong id="stateTitle" class="state-title">Всё сохранено</strong><small id="status" class="status">Можно закрыть панель</small></span>
+      </div>
+      <button id="save" class="save" type="button" disabled>Сохранить</button>
+    </div>
   </div>
 
   <script>
@@ -138,13 +512,18 @@
 
       const initData = tg ? tg.initData : "";
       const user = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
+      const listKeys = ["cities", "programs", "mentors", "dates"];
+      const brandGate = document.getElementById("brandGate");
+      const adminShell = document.getElementById("adminShell");
       const identity = document.getElementById("identity");
       const loading = document.getElementById("loading");
       const form = document.getElementById("form");
       const savebar = document.getElementById("savebar");
       const saveButton = document.getElementById("save");
+      const stateTitle = document.getElementById("stateTitle");
       const status = document.getElementById("status");
       let draft = null;
+      let dirty = false;
 
       identity.textContent = user
         ? `${user.first_name || "Администратор"}${user.username ? " · @" + user.username : ""}`
@@ -165,45 +544,95 @@
         });
       }
 
-      function setStatus(message, kind = "") {
+      function variantsText(count) {
+        const lastTwo = count % 100;
+        const last = count % 10;
+        const word = lastTwo >= 11 && lastTwo <= 14 ? "вариантов" : last === 1 ? "вариант" : last >= 2 && last <= 4 ? "варианта" : "вариантов";
+        return `${count} ${word}`;
+      }
+
+      function syncCloseWarning() {
+        if (!tg) return;
+        if (dirty && tg.enableClosingConfirmation) tg.enableClosingConfirmation();
+        if (!dirty && tg.disableClosingConfirmation) tg.disableClosingConfirmation();
+      }
+
+      function setState(title, message, kind) {
+        stateTitle.textContent = title;
         status.textContent = message;
-        status.className = "status" + (kind ? " " + kind : "");
+        savebar.dataset.state = kind;
+      }
+
+      function markDirty(message = "Нажмите «Сохранить»") {
+        dirty = true;
+        saveButton.disabled = false;
+        setState("Есть изменения", message, "dirty");
+        syncCloseWarning();
+      }
+
+      function markClean(message = "Можно закрыть панель") {
+        dirty = false;
+        saveButton.disabled = true;
+        setState("Всё сохранено", message, "clean");
+        syncCloseWarning();
+      }
+
+      function updateSummary() {
+        if (!draft) return;
+        listKeys.forEach(key => {
+          const text = variantsText(draft[key].length);
+          const count = document.querySelector(`[data-count-for="${key}"]`);
+          const flowValue = document.querySelector(`[data-flow-value="${key}"]`);
+          if (count) count.textContent = text;
+          if (flowValue) flowValue.textContent = text;
+        });
       }
 
       function renderList(key) {
         const card = document.querySelector(`[data-list-card="${key}"]`);
         const container = card.querySelector(".items");
         container.innerHTML = "";
+
         draft[key].forEach((value, index) => {
           const row = document.createElement("div");
           row.className = "item";
 
+          const number = document.createElement("span");
+          number.className = "item-index";
+          number.textContent = index + 1;
+
           const input = document.createElement("input");
           input.value = value;
           input.maxLength = 120;
-          input.setAttribute("aria-label", `Элемент ${index + 1}`);
-          input.addEventListener("input", () => { draft[key][index] = input.value; setStatus("Есть несохранённые изменения"); });
+          input.placeholder = card.dataset.placeholder || "Введите значение";
+          input.setAttribute("aria-label", `${card.querySelector("h2").textContent}: вариант ${index + 1}`);
+          input.addEventListener("input", () => {
+            draft[key][index] = input.value;
+            markDirty("Текст варианта изменён");
+          });
 
           const actions = document.createElement("div");
           actions.className = "item-actions";
           [
-            ["↑", "Поднять выше", () => move(key, index, -1)],
-            ["↓", "Опустить ниже", () => move(key, index, 1)],
-            ["×", "Удалить", () => remove(key, index), "danger"]
-          ].forEach(([text, label, action, extra]) => {
+            ["↑", "Поднять выше", () => move(key, index, -1), "", index === 0],
+            ["↓", "Опустить ниже", () => move(key, index, 1), "", index === draft[key].length - 1],
+            ["×", "Удалить", () => remove(key, index), "danger", false]
+          ].forEach(([text, label, action, extra, disabled]) => {
             const button = document.createElement("button");
             button.type = "button";
             button.className = "icon-btn" + (extra ? " " + extra : "");
             button.textContent = text;
             button.title = label;
-            button.setAttribute("aria-label", label);
+            button.disabled = disabled;
+            button.setAttribute("aria-label", `${label}: ${value || "пустой вариант"}`);
             button.addEventListener("click", action);
             actions.appendChild(button);
           });
 
-          row.append(input, actions);
+          row.append(number, input, actions);
           container.appendChild(row);
         });
+        updateSummary();
       }
 
       function move(key, index, delta) {
@@ -211,14 +640,27 @@
         if (next < 0 || next >= draft[key].length) return;
         [draft[key][index], draft[key][next]] = [draft[key][next], draft[key][index]];
         renderList(key);
-        setStatus("Есть несохранённые изменения");
+        markDirty("Порядок вариантов изменён");
+      }
+
+      function removeConfirmed(key, index) {
+        draft[key].splice(index, 1);
+        renderList(key);
+        markDirty("Вариант удалён");
       }
 
       function remove(key, index) {
-        if (draft[key].length === 1) { setStatus("Нужен хотя бы один вариант", "error"); return; }
-        draft[key].splice(index, 1);
-        renderList(key);
-        setStatus("Есть несохранённые изменения");
+        if (draft[key].length === 1) {
+          setState("Нельзя удалить", "Оставьте хотя бы один вариант", "error");
+          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
+          return;
+        }
+        const label = draft[key][index] || "этот вариант";
+        if (tg && tg.showConfirm) {
+          tg.showConfirm(`Удалить «${label}»?`, confirmed => { if (confirmed) removeConfirmed(key, index); });
+        } else if (window.confirm(`Удалить «${label}»?`)) {
+          removeConfirmed(key, index);
+        }
       }
 
       document.querySelectorAll("[data-list-card]").forEach(card => {
@@ -227,48 +669,58 @@
           draft[key].push("");
           renderList(key);
           card.querySelector(".items .item:last-child input").focus();
-          setStatus("Заполните новый вариант");
+          markDirty("Заполните новый вариант");
         });
       });
 
       ["eventName", "price", "payDetails"].forEach(key => {
         document.getElementById(key).addEventListener("input", event => {
           if (draft) draft[key] = event.target.value;
-          setStatus("Есть несохранённые изменения");
+          markDirty("Основные данные изменены");
         });
       });
 
       saveButton.addEventListener("click", async () => {
-        if (!draft) return;
+        if (!draft || !dirty) return;
         saveButton.disabled = true;
-        setStatus("Сохраняем…");
+        saveButton.textContent = "Сохраняем…";
+        setState("Сохраняем", "Пожалуйста, подождите", "dirty");
         try {
           const result = await api("/api/admin/config", { method: "PUT", body: JSON.stringify(draft) });
           draft = result.config;
           ["eventName", "price", "payDetails"].forEach(key => { document.getElementById(key).value = draft[key] || ""; });
-          ["cities", "programs", "dates", "mentors"].forEach(renderList);
-          setStatus("Настройки сохранены", "ok");
+          listKeys.forEach(renderList);
+          markClean("Настройки обновлены");
           if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
         } catch (error) {
-          setStatus(error.message, "error");
+          saveButton.disabled = false;
+          setState("Не удалось сохранить", error.message, "error");
           if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
         } finally {
-          saveButton.disabled = false;
+          saveButton.textContent = "Сохранить";
         }
+      });
+
+      window.addEventListener("beforeunload", event => {
+        if (!dirty) return;
+        event.preventDefault();
+        event.returnValue = "";
       });
 
       api("/api/admin/config")
         .then(result => {
           draft = result.config;
           ["eventName", "price", "payDetails"].forEach(key => { document.getElementById(key).value = draft[key] || ""; });
-          ["cities", "programs", "dates", "mentors"].forEach(renderList);
+          listKeys.forEach(renderList);
+          brandGate.classList.add("hidden");
+          adminShell.classList.remove("hidden");
           loading.classList.add("hidden");
           form.classList.remove("hidden");
           savebar.classList.remove("hidden");
+          markClean();
         })
         .catch(error => {
-          loading.textContent = error.message + ". Откройте панель заново командой /admin.";
-          identity.textContent = "Доступ не подтверждён";
+          console.warn("Admin access unavailable:", error.message);
         });
     })();
   </script>

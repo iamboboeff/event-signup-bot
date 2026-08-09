@@ -36,6 +36,7 @@ const DEFAULT_ADMINS_PATH = path.join(__dirname, "admins.json");
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
 const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 const ADMINS_PATH = path.join(DATA_DIR, "admins.json");
+const ADMIN_MODES_PATH = path.join(DATA_DIR, "admin-modes.json");
 const REGS_PATH = path.join(DATA_DIR, "registrations.json");
 const LEGACY_REGS_PATH = path.join(__dirname, "registrations.json");
 const ADMIN_HTML_PATH = path.join(__dirname, "admin.html");
@@ -104,6 +105,16 @@ function saveAdmins(admins) {
   return normalized;
 }
 
+function loadAdminModes() {
+  const ids = readJson(ADMIN_MODES_PATH, []);
+  if (!Array.isArray(ids)) return [];
+  return [...new Set(ids.map(value => Number(value)).filter(Number.isSafeInteger))];
+}
+
+function saveAdminModes(modes) {
+  writeJsonAtomic(ADMIN_MODES_PATH, [...modes]);
+}
+
 function loadRegs() {
   const current = readJson(REGS_PATH, null);
   if (current) return current;
@@ -151,7 +162,7 @@ async function deleteReg(id) {
 // ---------- bot ----------
 const bot = new Bot(BOT_TOKEN);
 const sessions = new Map(); // userId -> { step, draft }
-const adminModes = new Set(); // админский режим действует до /adminoff или перезапуска
+const adminModes = new Set(loadAdminModes()); // действует до /adminoff, включая перезапуск
 
 function choiceKeyboard(items, prefix, onePerRow = false) {
   const k = new InlineKeyboard();
@@ -167,6 +178,33 @@ function choiceKeyboard(items, prefix, onePerRow = false) {
 const mainMenu = new Keyboard()
   .text("📝 Записаться")
   .resized().persistent();
+
+// Обычный пользователь видит только запись. Полное меню Telegram включается
+// персонально в личном чате после успешной команды /admin.
+const PUBLIC_BOT_COMMANDS = [
+  { command: "start", description: "📝 Записаться" }
+];
+const ADMIN_BOT_COMMANDS = [
+  { command: "start", description: "📝 Записаться" },
+  { command: "list", description: "📋 Список записавшихся" },
+  { command: "admin", description: "⚙️ Открыть админ-панель" },
+  { command: "adminoff", description: "🚪 Выключить режим администратора" },
+  { command: "addadmin", description: "➕ Добавить администратора" },
+  { command: "kickadmin", description: "➖ Удалить администратора" },
+  { command: "id", description: "🆔 Показать Telegram ID" }
+];
+
+function privateChatCommandScope(ctx) {
+  return { type: "chat", chat_id: ctx.chat.id };
+}
+
+async function showAdminCommandMenu(ctx) {
+  await bot.api.setMyCommands(ADMIN_BOT_COMMANDS, { scope: privateChatCommandScope(ctx) });
+}
+
+async function hideAdminCommandMenu(ctx) {
+  await bot.api.deleteMyCommands({ scope: privateChatCommandScope(ctx) });
+}
 
 // Начать новую запись (из /start или по кнопке «Записаться»).
 async function startRegistration(ctx) {
@@ -248,6 +286,8 @@ function isAdminMode(user) {
   if (!user || !adminModes.has(user.id)) return false;
   if (isAdmin(user)) return true;
   adminModes.delete(user.id);
+  saveAdminModes(adminModes);
+  bot.api.deleteMyCommands({ scope: { type: "chat", chat_id: user.id } }).catch(() => {});
   return false;
 }
 
@@ -426,7 +466,10 @@ bot.command("admin", async (ctx) => {
     return;
   }
   adminModes.add(ctx.from.id);
+  saveAdminModes(adminModes);
   sessions.delete(ctx.from.id);
+  try { await showAdminCommandMenu(ctx); }
+  catch (e) { console.error("Не удалось показать меню администратора:", e.message); }
 
   if (!/^https:\/\//i.test(ADMIN_WEBAPP_URL)) {
     await ctx.reply(
@@ -444,7 +487,12 @@ bot.command("admin", async (ctx) => {
 
 bot.command("adminoff", async (ctx) => {
   adminModes.delete(ctx.from.id);
+  saveAdminModes(adminModes);
   sessions.delete(ctx.from.id);
+  if (ctx.chat.type === "private") {
+    try { await hideAdminCommandMenu(ctx); }
+    catch (e) { console.error("Не удалось скрыть меню администратора:", e.message); }
+  }
   await ctx.reply("Режим администратора выключен. Теперь бот работает для вас как обычно.", {
     reply_markup: ctx.chat.type === "private" ? mainMenu : { remove_keyboard: true }
   });
@@ -498,6 +546,12 @@ bot.command("kickadmin", async (ctx) => {
   }
 
   saveAdmins(admins);
+  if (target.type === "id") {
+    const removedId = Number(target.value);
+    adminModes.delete(removedId);
+    saveAdminModes(adminModes);
+    bot.api.deleteMyCommands({ scope: { type: "chat", chat_id: removedId } }).catch(() => {});
+  }
   await ctx.reply(`✅ ${adminTargetLabel(target)} удалён из администраторов.`);
 });
 
@@ -646,14 +700,7 @@ bot.catch((err) => console.error("Ошибка бота:", err));
 
 async function setupBotMeta() {
   try {
-    await bot.api.setMyCommands([
-      { command: "start", description: "📝 Записаться на мероприятие" },
-      { command: "list", description: "📋 Список записавшихся" },
-      { command: "admin", description: "⚙️ Включить режим администратора" },
-      { command: "adminoff", description: "🚪 Выключить режим администратора" },
-      { command: "addadmin", description: "➕ Добавить администратора" },
-      { command: "kickadmin", description: "➖ Удалить администратора" }
-    ]);
+    await bot.api.setMyCommands(PUBLIC_BOT_COMMANDS);
     const cfg = await getConfig();
     await bot.api.setMyDescription(
       `Бот для записи на мероприятие «${cfg.eventName}». Нажмите «Старт», чтобы оформить заявку.`
@@ -721,7 +768,7 @@ function validateTelegramInitData(initData) {
 
 function authenticateAdminRequest(req) {
   const user = validateTelegramInitData(req.headers["x-telegram-init-data"]);
-  if (!user || !isAdmin(user) || !adminModes.has(Number(user.id))) return null;
+  if (!user || !isAdminMode(user)) return null;
   return user;
 }
 
@@ -852,6 +899,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ADMIN_BOT_COMMANDS,
+  PUBLIC_BOT_COMMANDS,
   isAdmin,
   normalizeConfig,
   parseAdminTarget,
