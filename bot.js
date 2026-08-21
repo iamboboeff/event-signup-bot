@@ -164,6 +164,20 @@ const bot = new Bot(BOT_TOKEN);
 const sessions = new Map(); // userId -> { step, draft }
 const adminModes = new Set(loadAdminModes()); // действует до /adminoff, включая перезапуск
 
+const MOSCOW_REGISTRATION_CLOSED_MESSAGE = "Запись на мероприятия в Москве откроется позже";
+const PROGRAM_COMING_SOON_MESSAGE = "Скоро…";
+
+function normalizeChoice(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ru");
+}
+
+function registrationStopMessage(type, value) {
+  const choice = normalizeChoice(value);
+  if (type === "city" && choice === "москва") return MOSCOW_REGISTRATION_CLOSED_MESSAGE;
+  if (type === "program" && choice === "привычка быть счастливой") return PROGRAM_COMING_SOON_MESSAGE;
+  return null;
+}
+
 function choiceKeyboard(items, prefix, onePerRow = false) {
   const k = new InlineKeyboard();
   items.forEach((item, i) => {
@@ -623,16 +637,28 @@ bot.on("callback_query:data", async (ctx) => {
 
   if (type === "city" && s.step === "city" && cfg.cities[idx]) {
     s.draft.city = cfg.cities[idx];
-    s.step = "program";
     await ctx.editMessageText(`Город: ${s.draft.city}`);
+    const stopMessage = registrationStopMessage("city", s.draft.city);
+    if (stopMessage) {
+      sessions.delete(ctx.from.id);
+      await ctx.reply(stopMessage, { reply_markup: mainMenu });
+      return;
+    }
+    s.step = "program";
     await ctx.reply("Выберите направление:", {
       reply_markup: choiceKeyboard(cfg.programs, "program", true)
     });
 
   } else if (type === "program" && s.step === "program" && cfg.programs[idx]) {
     s.draft.program = cfg.programs[idx];
-    s.step = "name";
     await ctx.editMessageText(`Направление: ${s.draft.program}`);
+    const stopMessage = registrationStopMessage("program", s.draft.program);
+    if (stopMessage) {
+      sessions.delete(ctx.from.id);
+      await ctx.reply(stopMessage, { reply_markup: mainMenu });
+      return;
+    }
+    s.step = "name";
     await ctx.reply("Напишите вашу Фамилию и Имя:", { reply_markup: mainMenu });
 
   } else if (type === "mentor" && s.step === "mentor" && cfg.mentors[idx]) {
@@ -904,6 +930,7 @@ module.exports = {
   isAdmin,
   normalizeConfig,
   parseAdminTarget,
+  registrationStopMessage,
   sanitizeConfigInput,
   validateTelegramInitData
 };

@@ -17,6 +17,7 @@ const {
   PUBLIC_BOT_COMMANDS,
   isAdmin,
   parseAdminTarget,
+  registrationStopMessage,
   sanitizeConfigInput,
   validateTelegramInitData
 } = require("./bot");
@@ -60,6 +61,19 @@ test("ordinary Telegram menu exposes only registration", () => {
   assert.deepEqual(PUBLIC_BOT_COMMANDS.map(item => item.command), ["start"]);
   assert.equal(ADMIN_BOT_COMMANDS.some(item => item.command === "admin"), true);
   assert.equal(ADMIN_BOT_COMMANDS.some(item => item.command === "addadmin"), true);
+});
+
+test("registration stops for Moscow and the upcoming program", () => {
+  assert.equal(
+    registrationStopMessage("city", " Москва "),
+    "Запись на мероприятия в Москве откроется позже"
+  );
+  assert.equal(
+    registrationStopMessage("program", "Привычка Быть счастливой"),
+    "Скоро…"
+  );
+  assert.equal(registrationStopMessage("city", "Питер"), null);
+  assert.equal(registrationStopMessage("program", "Занятия аромаклуба"), null);
 });
 
 test("admin config is trimmed, deduplicated and validated", () => {
