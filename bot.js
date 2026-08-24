@@ -20,10 +20,24 @@ const ADMIN_USERNAMES = (process.env.ADMIN_USERNAMES || "")
   .split(",")
   .map(s => s.trim().replace(/^@/, "").toLowerCase())
   .filter(Boolean);
-// Публичный адрес сервиса (Cloud Run). Если задан — бот работает через webhook, иначе long-polling.
+
+function normalizePublicUrl(value) {
+  const url = String(value || "").trim().replace(/\/$/, "");
+  if (!url) return "";
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
+function resolveAdminWebappUrl(env = process.env) {
+  const explicit = normalizePublicUrl(env.ADMIN_WEBAPP_URL);
+  if (explicit) return explicit;
+  const publicUrl = normalizePublicUrl(env.WEBHOOK_URL || env.DOMAIN);
+  return publicUrl ? `${publicUrl}/admin` : "";
+}
+
+// Если публичный webhook не задан, бот работает через long polling.
 const WEBHOOK_URL = process.env.WEBHOOK_URL || "";
-// Полный HTTPS-адрес админки. Для webhook автоматически получается из WEBHOOK_URL.
-const ADMIN_WEBAPP_URL = process.env.ADMIN_WEBAPP_URL || (WEBHOOK_URL ? WEBHOOK_URL.replace(/\/$/, "") + "/admin" : "");
+// Bothost передаёт DOMAIN автоматически после подключения домена.
+const ADMIN_WEBAPP_URL = resolveAdminWebappUrl();
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || (BOT_TOKEN.split(":")[1] || "secret").slice(0, 16);
 const PORT = Number(process.env.PORT) || 8080;
 const WEBHOOK_PATH = "/webhook";
@@ -975,6 +989,7 @@ module.exports = {
   normalizeSessionStore,
   parseAdminTarget,
   registrationStopMessage,
+  resolveAdminWebappUrl,
   sanitizeConfigInput,
   validateTelegramInitData
 };

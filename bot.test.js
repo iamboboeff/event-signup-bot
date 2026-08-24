@@ -19,6 +19,7 @@ const {
   normalizeSessionStore,
   parseAdminTarget,
   registrationStopMessage,
+  resolveAdminWebappUrl,
   sanitizeConfigInput,
   validateTelegramInitData
 } = require("./bot");
@@ -98,6 +99,17 @@ test("unfinished registration sessions survive restarts for up to 24 hours", () 
     draft: { city: "Питер" },
     updatedAt: "2026-08-24T12:59:00.000Z"
   }]]);
+});
+
+test("Bothost domain provides the admin panel URL without enabling a webhook", () => {
+  assert.equal(
+    resolveAdminWebappUrl({ DOMAIN: "event-signup.bothost.ru" }),
+    "https://event-signup.bothost.ru/admin"
+  );
+  assert.equal(
+    resolveAdminWebappUrl({ ADMIN_WEBAPP_URL: "https://admin.example.com/panel/" }),
+    "https://admin.example.com/panel"
+  );
 });
 
 test("admin config is trimmed, deduplicated and validated", () => {

@@ -9,7 +9,7 @@ RUN npm ci --omit=dev
 COPY . .
 
 ENV NODE_ENV=production
-# Cloud Run сам передаёт PORT; локально по умолчанию 8080.
+# Хостинг передаёт PORT; локально по умолчанию используется 8080.
 EXPOSE 8080
 
 CMD ["node", "bot.js"]
