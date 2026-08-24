@@ -37,6 +37,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data
 const CONFIG_PATH = path.join(DATA_DIR, "config.json");
 const ADMINS_PATH = path.join(DATA_DIR, "admins.json");
 const ADMIN_MODES_PATH = path.join(DATA_DIR, "admin-modes.json");
+const SESSIONS_PATH = path.join(DATA_DIR, "sessions.json");
 const REGS_PATH = path.join(DATA_DIR, "registrations.json");
 const LEGACY_REGS_PATH = path.join(__dirname, "registrations.json");
 const ADMIN_HTML_PATH = path.join(__dirname, "admin.html");
@@ -115,6 +116,28 @@ function saveAdminModes(modes) {
   writeJsonAtomic(ADMIN_MODES_PATH, [...modes]);
 }
 
+const REGISTRATION_STEPS = new Set(["city", "program", "name", "mentor", "date", "sub"]);
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+function normalizeSessionStore(store, now = Date.now()) {
+  if (!store || typeof store !== "object" || Array.isArray(store)) return [];
+  return Object.entries(store).flatMap(([userId, session]) => {
+    if (!/^\d+$/.test(userId) || !session || typeof session !== "object") return [];
+    if (!REGISTRATION_STEPS.has(session.step) || !session.draft || typeof session.draft !== "object") return [];
+    const updatedAt = Date.parse(session.updatedAt || "");
+    if (!Number.isFinite(updatedAt) || now - updatedAt > SESSION_TTL_MS || updatedAt > now + 60_000) return [];
+    return [[Number(userId), { step: session.step, draft: { ...session.draft }, updatedAt: session.updatedAt }]];
+  });
+}
+
+function loadSessions() {
+  return new Map(normalizeSessionStore(readJson(SESSIONS_PATH, {})));
+}
+
+function saveSessions(sessions) {
+  writeJsonAtomic(SESSIONS_PATH, Object.fromEntries(sessions));
+}
+
 function loadRegs() {
   const current = readJson(REGS_PATH, null);
   if (current) return current;
@@ -161,8 +184,23 @@ async function deleteReg(id) {
 
 // ---------- bot ----------
 const bot = new Bot(BOT_TOKEN);
-const sessions = new Map(); // userId -> { step, draft }
+const sessions = loadSessions(); // userId -> { step, draft, updatedAt }
 const adminModes = new Set(loadAdminModes()); // действует до /adminoff, включая перезапуск
+
+function setSession(userId, session) {
+  session.updatedAt = new Date().toISOString();
+  sessions.set(userId, session);
+  saveSessions(sessions);
+}
+
+function saveSession(userId, session) {
+  setSession(userId, session);
+}
+
+function deleteSession(userId) {
+  if (!sessions.delete(userId)) return;
+  saveSessions(sessions);
+}
 
 const MOSCOW_REGISTRATION_CLOSED_MESSAGE = "Запись на мероприятия в Москве откроется позже";
 const PROGRAM_COMING_SOON_MESSAGE = "Скоро…";
@@ -232,7 +270,7 @@ async function startRegistration(ctx) {
     return;
   }
   const cfg = await getConfig();
-  sessions.set(ctx.from.id, { step: "city", draft: {} });
+  setSession(ctx.from.id, { step: "city", draft: {} });
   await ctx.reply(
     `Здравствуйте! Это запись на «${cfg.eventName}».\n\nСначала выберите город:`,
     { reply_markup: choiceKeyboard(cfg.cities, "city") }
@@ -481,7 +519,7 @@ bot.command("admin", async (ctx) => {
   }
   adminModes.add(ctx.from.id);
   saveAdminModes(adminModes);
-  sessions.delete(ctx.from.id);
+  deleteSession(ctx.from.id);
   try { await showAdminCommandMenu(ctx); }
   catch (e) { console.error("Не удалось показать меню администратора:", e.message); }
 
@@ -502,7 +540,7 @@ bot.command("admin", async (ctx) => {
 bot.command("adminoff", async (ctx) => {
   adminModes.delete(ctx.from.id);
   saveAdminModes(adminModes);
-  sessions.delete(ctx.from.id);
+  deleteSession(ctx.from.id);
   if (ctx.chat.type === "private") {
     try { await hideAdminCommandMenu(ctx); }
     catch (e) { console.error("Не удалось скрыть меню администратора:", e.message); }
@@ -602,6 +640,7 @@ bot.on("message:text", async (ctx) => {
   if (text.length < 2) { await ctx.reply("Пожалуйста, введите Фамилию и Имя:"); return; }
   s.draft.name = text;
   s.step = "mentor";
+  saveSession(ctx.from.id, s);
   const cfg = await getConfig();
   await ctx.reply("Выберите наставника:", { reply_markup: choiceKeyboard(cfg.mentors, "mentor") });
 });
@@ -633,18 +672,25 @@ bot.on("callback_query:data", async (ctx) => {
   const [type, idxStr] = ctx.callbackQuery.data.split(":");
   const idx = parseInt(idxStr, 10);
 
+  const selectedChoice = type === "city"
+    ? cfg.cities[idx]
+    : type === "program" ? cfg.programs[idx] : null;
+  const stopMessage = selectedChoice && registrationStopMessage(type, selectedChoice);
+  if (stopMessage && (!s || s.step === type)) {
+    const label = type === "city" ? "Город" : "Направление";
+    await ctx.editMessageText(`${label}: ${selectedChoice}`);
+    deleteSession(ctx.from.id);
+    await ctx.reply(stopMessage, { reply_markup: mainMenu });
+    return;
+  }
+
   if (!s) { await ctx.reply("Нажмите «📝 Записаться», чтобы начать.", { reply_markup: mainMenu }); return; }
 
   if (type === "city" && s.step === "city" && cfg.cities[idx]) {
     s.draft.city = cfg.cities[idx];
     await ctx.editMessageText(`Город: ${s.draft.city}`);
-    const stopMessage = registrationStopMessage("city", s.draft.city);
-    if (stopMessage) {
-      sessions.delete(ctx.from.id);
-      await ctx.reply(stopMessage, { reply_markup: mainMenu });
-      return;
-    }
     s.step = "program";
+    saveSession(ctx.from.id, s);
     await ctx.reply("Выберите направление:", {
       reply_markup: choiceKeyboard(cfg.programs, "program", true)
     });
@@ -652,24 +698,21 @@ bot.on("callback_query:data", async (ctx) => {
   } else if (type === "program" && s.step === "program" && cfg.programs[idx]) {
     s.draft.program = cfg.programs[idx];
     await ctx.editMessageText(`Направление: ${s.draft.program}`);
-    const stopMessage = registrationStopMessage("program", s.draft.program);
-    if (stopMessage) {
-      sessions.delete(ctx.from.id);
-      await ctx.reply(stopMessage, { reply_markup: mainMenu });
-      return;
-    }
     s.step = "name";
+    saveSession(ctx.from.id, s);
     await ctx.reply("Напишите вашу Фамилию и Имя:", { reply_markup: mainMenu });
 
   } else if (type === "mentor" && s.step === "mentor" && cfg.mentors[idx]) {
     s.draft.mentor = cfg.mentors[idx];
     s.step = "date";
+    saveSession(ctx.from.id, s);
     await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
     await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(cfg.dates, "date") });
 
   } else if (type === "date" && s.step === "date" && cfg.dates[idx]) {
     s.draft.date = cfg.dates[idx];
     s.step = "sub";
+    saveSession(ctx.from.id, s);
     await ctx.editMessageText(`Дата: ${s.draft.date}`);
     const k = new InlineKeyboard().text("Да", "sub:1").text("Нет", "sub:0");
     await ctx.reply("Вы участвуете по абонементу?", { reply_markup: k });
@@ -678,7 +721,7 @@ bot.on("callback_query:data", async (ctx) => {
     s.draft.sub = idx === 1;
     await ctx.editMessageText(`По абонементу: ${s.draft.sub ? "Да" : "Нет"}`);
     await finish(ctx, s.draft);
-    sessions.delete(ctx.from.id);
+    deleteSession(ctx.from.id);
   }
 });
 
@@ -929,6 +972,7 @@ module.exports = {
   PUBLIC_BOT_COMMANDS,
   isAdmin,
   normalizeConfig,
+  normalizeSessionStore,
   parseAdminTarget,
   registrationStopMessage,
   sanitizeConfigInput,

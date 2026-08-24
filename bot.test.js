@@ -16,6 +16,7 @@ const {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
   isAdmin,
+  normalizeSessionStore,
   parseAdminTarget,
   registrationStopMessage,
   sanitizeConfigInput,
@@ -74,6 +75,29 @@ test("registration stops for Moscow and the upcoming program", () => {
   );
   assert.equal(registrationStopMessage("city", "Питер"), null);
   assert.equal(registrationStopMessage("program", "Занятия аромаклуба"), null);
+});
+
+test("unfinished registration sessions survive restarts for up to 24 hours", () => {
+  const now = Date.parse("2026-08-24T13:00:00.000Z");
+  const sessions = normalizeSessionStore({
+    "123": {
+      step: "program",
+      draft: { city: "Питер" },
+      updatedAt: "2026-08-24T12:59:00.000Z"
+    },
+    "456": {
+      step: "program",
+      draft: { city: "Питер" },
+      updatedAt: "2026-08-22T12:59:00.000Z"
+    },
+    invalid: { step: "city", draft: {}, updatedAt: "2026-08-24T12:59:00.000Z" }
+  }, now);
+
+  assert.deepEqual(sessions, [[123, {
+    step: "program",
+    draft: { city: "Питер" },
+    updatedAt: "2026-08-24T12:59:00.000Z"
+  }]]);
 });
 
 test("admin config is trimmed, deduplicated and validated", () => {
