@@ -41,6 +41,9 @@ const ADMIN_WEBAPP_URL = resolveAdminWebappUrl();
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || (BOT_TOKEN.split(":")[1] || "secret").slice(0, 16);
 const PORT = Number(process.env.PORT) || 8080;
 const WEBHOOK_PATH = "/webhook";
+const DOCTOR_SHEET_WEBAPP_URL = normalizePublicUrl(process.env.DOCTOR_SHEET_WEBAPP_URL);
+const DOCTOR_SHEET_SECRET = String(process.env.DOCTOR_SHEET_SECRET || "").trim();
+const DOCTOR_PROGRAM_NAME = "диагностика с доктором";
 
 // ---------- storage ----------
 // config.json хранит только исходные значения. Все изменения из админки и
@@ -130,7 +133,7 @@ function saveAdminModes(modes) {
   writeJsonAtomic(ADMIN_MODES_PATH, [...modes]);
 }
 
-const REGISTRATION_STEPS = new Set(["city", "program", "name", "mentor", "date", "sub"]);
+const REGISTRATION_STEPS = new Set(["city", "program", "name", "mentor", "doctor_slot", "date", "sub"]);
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 function normalizeSessionStore(store, now = Date.now()) {
@@ -228,6 +231,94 @@ function registrationStopMessage(type, value) {
   if (type === "city" && choice === "москва") return MOSCOW_REGISTRATION_CLOSED_MESSAGE;
   if (type === "program" && choice === "привычка быть счастливой") return PROGRAM_COMING_SOON_MESSAGE;
   return null;
+}
+
+function isDoctorProgram(value) {
+  return normalizeChoice(value) === DOCTOR_PROGRAM_NAME;
+}
+
+function isDoctorScheduleConfigured() {
+  return /^https:\/\//i.test(DOCTOR_SHEET_WEBAPP_URL) && DOCTOR_SHEET_SECRET.length >= 16;
+}
+
+function normalizeDoctorSlots(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value.flatMap(slot => {
+    if (!slot || typeof slot !== "object") return [];
+    const normalized = {
+      id: String(slot.id || "").trim(),
+      date: String(slot.date || "").trim(),
+      time: String(slot.time || "").trim()
+    };
+    if (!normalized.id || !normalized.date || !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(normalized.time)) return [];
+    if (normalized.id.length > 80 || normalized.date.length > 40 || seen.has(normalized.id)) return [];
+    seen.add(normalized.id);
+    return [normalized];
+  }).slice(0, 50);
+}
+
+function doctorSlotLabel(slot) {
+  return `${slot.date} · ${slot.time.replace(/:00$/, "")}`;
+}
+
+async function callDoctorSchedule(url, secret, action, payload = {}, fetchImpl = fetch) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action, secret, ...payload }),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    if (!result || result.ok !== true) {
+      const error = new Error(result && result.error ? result.error : "Сервис расписания вернул ошибку");
+      error.code = result && result.code ? result.code : "SCHEDULE_ERROR";
+      throw error;
+    }
+    return result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function doctorScheduleRequest(action, payload) {
+  if (!isDoctorScheduleConfigured()) {
+    const error = new Error("Расписание врача не подключено");
+    error.code = "SCHEDULE_NOT_CONFIGURED";
+    throw error;
+  }
+  return callDoctorSchedule(
+    DOCTOR_SHEET_WEBAPP_URL,
+    DOCTOR_SHEET_SECRET,
+    action,
+    payload
+  );
+}
+
+function doctorSlotsKeyboard(slots) {
+  const keyboard = new InlineKeyboard();
+  slots.forEach((slot, index) => keyboard.text(doctorSlotLabel(slot), `doctor_slot:${index}`).row());
+  keyboard.text("🔄 Обновить слоты", "doctor_refresh:0");
+  return keyboard;
+}
+
+async function refreshDoctorSlots(ctx, session, editMessage = false, prefix = "") {
+  const result = await doctorScheduleRequest("slots");
+  const slots = normalizeDoctorSlots(result.slots);
+  session.draft.doctorSlots = slots;
+  session.step = "doctor_slot";
+  saveSession(ctx.from.id, session);
+
+  const text = slots.length
+    ? `${prefix}Выберите свободные дату и время:`
+    : `${prefix}Свободных слотов пока нет. Можно обновить расписание позже.`;
+  const options = { reply_markup: doctorSlotsKeyboard(slots) };
+  if (editMessage) await ctx.editMessageText(text, options);
+  else await ctx.reply(text, options);
 }
 
 function choiceKeyboard(items, prefix, onePerRow = false) {
@@ -656,7 +747,10 @@ bot.on("message:text", async (ctx) => {
   s.step = "mentor";
   saveSession(ctx.from.id, s);
   const cfg = await getConfig();
-  await ctx.reply("Выберите наставника:", { reply_markup: choiceKeyboard(cfg.mentors, "mentor") });
+  const label = isDoctorProgram(s.draft.program) && isDoctorScheduleConfigured()
+    ? "Выберите консультанта:"
+    : "Выберите наставника:";
+  await ctx.reply(label, { reply_markup: choiceKeyboard(cfg.mentors, "mentor") });
 });
 
 // Шаги анкеты с кнопками
@@ -718,10 +812,70 @@ bot.on("callback_query:data", async (ctx) => {
 
   } else if (type === "mentor" && s.step === "mentor" && cfg.mentors[idx]) {
     s.draft.mentor = cfg.mentors[idx];
-    s.step = "date";
-    saveSession(ctx.from.id, s);
-    await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
-    await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(cfg.dates, "date") });
+    if (isDoctorProgram(s.draft.program) && isDoctorScheduleConfigured()) {
+      s.step = "doctor_slot";
+      saveSession(ctx.from.id, s);
+      await ctx.editMessageText(`Консультант: ${s.draft.mentor}`);
+      try {
+        await refreshDoctorSlots(ctx, s);
+      } catch (error) {
+        console.error("Не удалось получить расписание врача:", error.message);
+        await ctx.reply("Не удалось загрузить расписание. Попробуйте обновить слоты.", {
+          reply_markup: doctorSlotsKeyboard([])
+        });
+      }
+    } else {
+      s.step = "date";
+      saveSession(ctx.from.id, s);
+      await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
+      await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(cfg.dates, "date") });
+    }
+
+  } else if (type === "doctor_refresh" && s.step === "doctor_slot") {
+    try {
+      await refreshDoctorSlots(ctx, s, true);
+    } catch (error) {
+      console.error("Не удалось обновить расписание врача:", error.message);
+      await ctx.reply("Расписание временно недоступно. Попробуйте ещё раз чуть позже.", {
+        reply_markup: doctorSlotsKeyboard([])
+      });
+    }
+
+  } else if (type === "doctor_slot" && s.step === "doctor_slot") {
+    const slots = normalizeDoctorSlots(s.draft.doctorSlots);
+    const slot = slots[idx];
+    if (!slot) {
+      await refreshDoctorSlots(ctx, s, true, "Список слотов изменился. ");
+      return;
+    }
+
+    try {
+      const result = await doctorScheduleRequest("book", {
+        slotId: slot.id,
+        expectedDate: slot.date,
+        expectedTime: slot.time,
+        patientName: s.draft.name,
+        consultant: s.draft.mentor
+      });
+      const booked = result.slot || slot;
+      await ctx.editMessageText(`Дата и время: ${doctorSlotLabel(booked)}`);
+      deleteSession(ctx.from.id);
+      await ctx.reply(
+        `Вы записаны на диагностику с доктором ✅\n\n` +
+        `Дата и время: ${doctorSlotLabel(booked)}\n` +
+        `Консультант: ${s.draft.mentor}`,
+        { reply_markup: mainMenu }
+      );
+    } catch (error) {
+      if (["SLOT_UNAVAILABLE", "SLOT_CHANGED", "SLOT_NOT_FOUND"].includes(error.code)) {
+        await refreshDoctorSlots(ctx, s, true, "Этот слот уже недоступен. ");
+        return;
+      }
+      console.error("Не удалось забронировать слот врача:", error.message);
+      await ctx.reply("Не удалось завершить запись. Выберите слот ещё раз или обновите расписание.", {
+        reply_markup: doctorSlotsKeyboard(slots)
+      });
+    }
 
   } else if (type === "date" && s.step === "date" && cfg.dates[idx]) {
     s.draft.date = cfg.dates[idx];
@@ -984,8 +1138,12 @@ if (require.main === module) {
 module.exports = {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
+  callDoctorSchedule,
+  doctorSlotLabel,
   isAdmin,
+  isDoctorProgram,
   normalizeConfig,
+  normalizeDoctorSlots,
   normalizeSessionStore,
   parseAdminTarget,
   registrationStopMessage,

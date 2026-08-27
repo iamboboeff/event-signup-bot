@@ -15,8 +15,12 @@ after(() => fs.rmSync(testDataDir, { recursive: true, force: true }));
 const {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
+  callDoctorSchedule,
+  doctorSlotLabel,
   isAdmin,
+  isDoctorProgram,
   normalizeSessionStore,
+  normalizeDoctorSlots,
   parseAdminTarget,
   registrationStopMessage,
   resolveAdminWebappUrl,
@@ -76,6 +80,46 @@ test("registration stops for Moscow and the upcoming program", () => {
   );
   assert.equal(registrationStopMessage("city", "Питер"), null);
   assert.equal(registrationStopMessage("program", "Занятия аромаклуба"), null);
+});
+
+test("doctor diagnostics program is detected regardless of spaces and case", () => {
+  assert.equal(isDoctorProgram(" Диагностика   С ДОКТОРОМ "), true);
+  assert.equal(isDoctorProgram("Занятия аромаклуба"), false);
+});
+
+test("doctor slots are sanitized, deduplicated and labelled", () => {
+  const slots = normalizeDoctorSlots([
+    { id: "123:4", date: "23.09.2026", time: "13:00:00", patientName: "must not leak" },
+    { id: "123:4", date: "23.09.2026", time: "13:00:00" },
+    { id: "", date: "23.09.2026", time: "14:00" },
+    { id: "123:5", date: "23.09.2026", time: "not-a-time" }
+  ]);
+  assert.deepEqual(slots, [{ id: "123:4", date: "23.09.2026", time: "13:00:00" }]);
+  assert.equal(doctorSlotLabel(slots[0]), "23.09.2026 · 13:00");
+  assert.equal("patientName" in slots[0], false);
+});
+
+test("doctor schedule client posts the secret and reports API error codes", async () => {
+  const requests = [];
+  const fetchOk = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ ok: true, slots: [] }) };
+  };
+  await callDoctorSchedule("https://example.com/exec", "test-secret-123456", "slots", {}, fetchOk);
+  assert.equal(requests[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    action: "slots",
+    secret: "test-secret-123456"
+  });
+
+  const fetchConflict = async () => ({
+    ok: true,
+    json: async () => ({ ok: false, code: "SLOT_UNAVAILABLE", error: "busy" })
+  });
+  await assert.rejects(
+    callDoctorSchedule("https://example.com/exec", "test-secret-123456", "book", {}, fetchConflict),
+    error => error.code === "SLOT_UNAVAILABLE"
+  );
 });
 
 test("unfinished registration sessions survive restarts for up to 24 hours", () => {
