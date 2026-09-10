@@ -156,6 +156,18 @@ test("Bothost domain provides the admin panel URL without enabling a webhook", (
   );
 });
 
+test("WEBHOOK_URL с путём от хостинга не задваивает /webhook", () => {
+  // Bothost подставляет WEBHOOK_URL уже вида https://<домен>/webhook.
+  assert.equal(
+    resolveAdminWebappUrl({ WEBHOOK_URL: "https://bot-123.bothost.tech/webhook" }),
+    "https://bot-123.bothost.tech/admin"
+  );
+  assert.equal(
+    resolveAdminWebappUrl({ WEBHOOK_URL: "https://bot-123.bothost.tech" }),
+    "https://bot-123.bothost.tech/admin"
+  );
+});
+
 test("admin config is trimmed, deduplicated and validated", () => {
   const config = sanitizeConfigInput({
     eventName: " Новое событие ",

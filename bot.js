@@ -27,15 +27,22 @@ function normalizePublicUrl(value) {
   return /^https?:\/\//i.test(url) ? url : `https://${url}`;
 }
 
+// Хостинг может передать WEBHOOK_URL уже с путём: Bothost подставляет
+// https://<домен>/webhook. Отрезаем его, иначе setWebhook получит /webhook/webhook
+// (Telegram будет слать апдейты в никуда), а ссылка на админку — /webhook/admin.
+function webhookOrigin(value) {
+  return normalizePublicUrl(String(value || "").trim().replace(/\/+$/, "").replace(/\/webhook$/i, ""));
+}
+
 function resolveAdminWebappUrl(env = process.env) {
   const explicit = normalizePublicUrl(env.ADMIN_WEBAPP_URL);
   if (explicit) return explicit;
-  const publicUrl = normalizePublicUrl(env.WEBHOOK_URL || env.DOMAIN);
+  const publicUrl = webhookOrigin(env.WEBHOOK_URL) || normalizePublicUrl(env.DOMAIN);
   return publicUrl ? `${publicUrl}/admin` : "";
 }
 
 // Если публичный webhook не задан, бот работает через long polling.
-const WEBHOOK_URL = process.env.WEBHOOK_URL || "";
+const WEBHOOK_URL = webhookOrigin(process.env.WEBHOOK_URL);
 // Bothost передаёт DOMAIN автоматически после подключения домена.
 const ADMIN_WEBAPP_URL = resolveAdminWebappUrl();
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || (BOT_TOKEN.split(":")[1] || "secret").slice(0, 16);
