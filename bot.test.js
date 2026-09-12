@@ -16,9 +16,11 @@ const {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
   callDoctorSchedule,
+  datesForMentor,
   doctorSlotLabel,
   isAdmin,
   isDoctorProgram,
+  normalizeConfig,
   normalizeSessionStore,
   normalizeDoctorSlots,
   parseAdminTarget,
@@ -69,17 +71,45 @@ test("ordinary Telegram menu exposes only registration", () => {
   assert.equal(ADMIN_BOT_COMMANDS.some(item => item.command === "addadmin"), true);
 });
 
-test("registration stops for Moscow and the upcoming program", () => {
+test("registration stops on the options the admin marked with a notice", () => {
+  // Настройки по умолчанию: Москва и «Привычка Быть счастливой» закрыты.
+  const config = normalizeConfig({});
   assert.equal(
-    registrationStopMessage("city", " Москва "),
+    registrationStopMessage(config, "city", " Москва "),
     "Запись на мероприятия в Москве откроется позже"
   );
   assert.equal(
-    registrationStopMessage("program", "Привычка Быть счастливой"),
+    registrationStopMessage(config, "program", "Привычка Быть счастливой"),
     "Скоро…"
   );
-  assert.equal(registrationStopMessage("city", "Питер"), null);
-  assert.equal(registrationStopMessage("program", "Занятия аромаклуба"), null);
+  assert.equal(registrationStopMessage(config, "city", "Питер"), null);
+  assert.equal(registrationStopMessage(config, "program", "Занятия аромаклуба"), null);
+
+  // Всё, что задано в админке, работает так же — включая наставников.
+  const edited = normalizeConfig({
+    ...config,
+    notices: { cities: {}, programs: {}, mentors: { "Золото": "Наставник в отпуске" } }
+  });
+  assert.equal(registrationStopMessage(edited, "city", "Москва"), null);
+  assert.equal(registrationStopMessage(edited, "mentor", "золото"), "Наставник в отпуске");
+});
+
+test("mentor keeps personal dates and falls back to the shared list", () => {
+  const config = normalizeConfig({ mentorDates: { "Золото": ["Вторник", "Четверг"] } });
+  assert.deepEqual(datesForMentor(config, "золото"), ["Вторник", "Четверг"]);
+  assert.deepEqual(datesForMentor(config, "Серебро"), config.dates);
+  assert.deepEqual(datesForMentor(config, "Удалённый наставник"), config.dates);
+});
+
+test("notices and mentor dates are dropped when their option disappears", () => {
+  const config = normalizeConfig({
+    cities: ["Питер"],
+    mentors: ["Серебро"],
+    notices: { cities: { "Москва": "Скоро" }, programs: {}, mentors: {} },
+    mentorDates: { "Золото": ["Вторник"], "Серебро": [" ", ""] }
+  });
+  assert.deepEqual(config.notices.cities, {});
+  assert.deepEqual(config.mentorDates, {});
 });
 
 test("doctor diagnostics program is detected regardless of spaces and case", () => {
@@ -181,6 +211,35 @@ test("admin config is trimmed, deduplicated and validated", () => {
   assert.equal(config.eventName, "Новое событие");
   assert.deepEqual(config.cities, ["Москва"]);
   assert.throws(() => sanitizeConfigInput({ ...config, dates: [] }));
+});
+
+test("admin config keeps notices and mentor dates only for existing options", () => {
+  const config = sanitizeConfigInput({
+    eventName: "Событие",
+    price: "",
+    payDetails: "",
+    cities: ["Москва", "Питер"],
+    programs: ["Аромаклуб"],
+    dates: ["Понедельник"],
+    mentors: ["Анна", "Пётр"],
+    notices: {
+      cities: { " Москва ": "  Скоро…  ", "Казань": "Нет такого города" },
+      programs: { "Аромаклуб": "   " },
+      mentors: {}
+    },
+    mentorDates: {
+      "Анна": [" Вторник ", "Вторник", ""],
+      "Пётр": [],
+      "Мария": ["Среда"]
+    }
+  });
+  assert.deepEqual(config.notices.cities, { "Москва": "Скоро…" });
+  assert.deepEqual(config.notices.programs, {});
+  assert.deepEqual(config.mentorDates, { "Анна": ["Вторник"] });
+  assert.throws(() => sanitizeConfigInput({
+    ...config,
+    notices: { ...config.notices, cities: { "Москва": "я".repeat(401) } }
+  }));
 });
 
 test("admin page contains valid inline JavaScript", () => {

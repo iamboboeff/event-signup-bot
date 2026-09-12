@@ -90,7 +90,42 @@ function normalizeConfig(config, fallback = readJson(DEFAULT_CONFIG_PATH, {})) {
   ["cities", "programs", "mentors", "dates"].forEach(key => {
     if (!Array.isArray(source[key]) || !source[key].length) normalized[key] = fallback[key];
   });
+  normalized.notices = normalizeNotices(normalized.notices, normalized);
+  normalized.mentorDates = normalizeMentorDates(normalized.mentorDates, normalized);
   return normalized;
+}
+
+function asPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+// Системные сообщения хранятся по видимому тексту варианта. Привязываем их к
+// актуальному списку: переименовали вариант или удалили — сообщение уходит с ним.
+function normalizeNotices(input, config) {
+  const source = asPlainObject(input);
+  const result = {};
+  NOTICE_KEYS.forEach(key => {
+    const byChoice = new Map(Object.entries(asPlainObject(source[key]))
+      .map(([label, text]) => [normalizeChoice(label), String(text == null ? "" : text).trim()]));
+    result[key] = Object.fromEntries((Array.isArray(config[key]) ? config[key] : [])
+      .map(option => [option, (byChoice.get(normalizeChoice(option)) || "").slice(0, NOTICE_MAX_LENGTH)])
+      .filter(([, text]) => text));
+  });
+  return result;
+}
+
+// Свои даты наставника. Пустой список равен его отсутствию — тогда работает общий.
+function normalizeMentorDates(input, config) {
+  const byChoice = new Map(Object.entries(asPlainObject(input))
+    .map(([label, list]) => [normalizeChoice(label), list]));
+  return Object.fromEntries((Array.isArray(config.mentors) ? config.mentors : []).flatMap(mentor => {
+    const list = byChoice.get(normalizeChoice(mentor));
+    if (!Array.isArray(list)) return [];
+    const values = [...new Set(list.map(value => String(value).trim()).filter(Boolean))]
+      .slice(0, LIST_MAX_ITEMS)
+      .map(value => value.slice(0, LIST_MAX_LENGTH));
+    return values.length ? [[mentor, values]] : [];
+  }));
 }
 
 function saveConfig(config) {
@@ -139,6 +174,18 @@ function loadAdminModes() {
 function saveAdminModes(modes) {
   writeJsonAtomic(ADMIN_MODES_PATH, [...modes]);
 }
+
+// Шаги с кнопками: тип из callback_data → список настроек и подпись в чате.
+const CHOICE_STEPS = {
+  city: { listKey: "cities", label: "Город" },
+  program: { listKey: "programs", label: "Направление" },
+  mentor: { listKey: "mentors", label: "Наставник" }
+};
+// Для этих списков админка умеет задавать системное сообщение вместо записи.
+const NOTICE_KEYS = ["cities", "programs", "mentors"];
+const NOTICE_MAX_LENGTH = 400;
+const LIST_MAX_ITEMS = 40;
+const LIST_MAX_LENGTH = 120;
 
 const REGISTRATION_STEPS = new Set(["city", "program", "name", "mentor", "doctor_slot", "date", "sub"]);
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -226,18 +273,32 @@ function deleteSession(userId) {
   saveSessions(sessions);
 }
 
-const MOSCOW_REGISTRATION_CLOSED_MESSAGE = "Запись на мероприятия в Москве откроется позже";
-const PROGRAM_COMING_SOON_MESSAGE = "Скоро…";
-
 function normalizeChoice(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ru");
 }
 
-function registrationStopMessage(type, value) {
-  const choice = normalizeChoice(value);
-  if (type === "city" && choice === "москва") return MOSCOW_REGISTRATION_CLOSED_MESSAGE;
-  if (type === "program" && choice === "привычка быть счастливой") return PROGRAM_COMING_SOON_MESSAGE;
-  return null;
+// Вариант в настройках хранится по видимому тексту, а участник мог выбрать его
+// до переименования — сравниваем по нормализованному виду.
+function lookupByChoice(map, value) {
+  if (!map || typeof map !== "object") return undefined;
+  const target = normalizeChoice(value);
+  const found = Object.keys(map).find(key => normalizeChoice(key) === target);
+  return found === undefined ? undefined : map[found];
+}
+
+// Если для варианта в админке задано системное сообщение («Скоро…»), запись
+// на нём останавливается: показываем текст и закрываем анкету.
+function registrationStopMessage(config, type, value) {
+  const step = CHOICE_STEPS[type];
+  if (!step) return null;
+  const notice = lookupByChoice(config && config.notices ? config.notices[step.listKey] : null, value);
+  return notice ? String(notice) : null;
+}
+
+// Даты наставника: свои, если заданы в админке, иначе общий список.
+function datesForMentor(config, mentor) {
+  const own = lookupByChoice(config ? config.mentorDates : null, mentor);
+  return Array.isArray(own) && own.length ? own : ((config && config.dates) || []);
 }
 
 function isDoctorProgram(value) {
@@ -787,13 +848,11 @@ bot.on("callback_query:data", async (ctx) => {
   const [type, idxStr] = ctx.callbackQuery.data.split(":");
   const idx = parseInt(idxStr, 10);
 
-  const selectedChoice = type === "city"
-    ? cfg.cities[idx]
-    : type === "program" ? cfg.programs[idx] : null;
-  const stopMessage = selectedChoice && registrationStopMessage(type, selectedChoice);
+  const step = CHOICE_STEPS[type];
+  const selectedChoice = step ? cfg[step.listKey][idx] : null;
+  const stopMessage = selectedChoice && registrationStopMessage(cfg, type, selectedChoice);
   if (stopMessage && (!s || s.step === type)) {
-    const label = type === "city" ? "Город" : "Направление";
-    await ctx.editMessageText(`${label}: ${selectedChoice}`);
+    await ctx.editMessageText(`${step.label}: ${selectedChoice}`);
     deleteSession(ctx.from.id);
     await ctx.reply(stopMessage, { reply_markup: mainMenu });
     return;
@@ -835,7 +894,9 @@ bot.on("callback_query:data", async (ctx) => {
       s.step = "date";
       saveSession(ctx.from.id, s);
       await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
-      await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(cfg.dates, "date") });
+      await ctx.reply("Выберите дату:", {
+        reply_markup: choiceKeyboard(datesForMentor(cfg, s.draft.mentor), "date")
+      });
     }
 
   } else if (type === "doctor_refresh" && s.step === "doctor_slot") {
@@ -884,8 +945,11 @@ bot.on("callback_query:data", async (ctx) => {
       });
     }
 
-  } else if (type === "date" && s.step === "date" && cfg.dates[idx]) {
-    s.draft.date = cfg.dates[idx];
+  } else if (type === "date" && s.step === "date") {
+    // Даты могли смениться, пока участник думал: молча игнорируем чужой индекс.
+    const mentorDates = datesForMentor(cfg, s.draft.mentor);
+    if (!mentorDates[idx]) return;
+    s.draft.date = mentorDates[idx];
     s.step = "sub";
     saveSession(ctx.from.id, s);
     await ctx.editMessageText(`Дата: ${s.draft.date}`);
@@ -1025,9 +1089,32 @@ function sanitizeConfigInput(input) {
     if (!Array.isArray(input[key])) throw new Error(`Поле «${key}» должно быть списком`);
     const values = [...new Set(input[key].map(value => String(value).trim()).filter(Boolean))];
     if (!values.length) throw new Error("В каждом разделе нужен хотя бы один вариант");
-    if (values.length > 40 || values.some(value => value.length > 120)) throw new Error("Слишком много вариантов или слишком длинный текст");
+    if (values.length > LIST_MAX_ITEMS || values.some(value => value.length > LIST_MAX_LENGTH)) throw new Error("Слишком много вариантов или слишком длинный текст");
     result[key] = values;
   });
+
+  // Системные сообщения и личные даты наставников привязаны к вариантам выше:
+  // всё, что не нашлось в списках, отбрасываем, чтобы настройки не копили мусор.
+  const notices = asPlainObject(input.notices);
+  result.notices = {};
+  NOTICE_KEYS.forEach(key => {
+    result.notices[key] = Object.fromEntries(Object.entries(asPlainObject(notices[key])).flatMap(([label, text]) => {
+      const option = String(label).trim();
+      const message = String(text == null ? "" : text).trim();
+      if (!option || !message || !result[key].includes(option)) return [];
+      if (message.length > NOTICE_MAX_LENGTH) throw new Error(`Системное сообщение длиннее ${NOTICE_MAX_LENGTH} символов`);
+      return [[option, message]];
+    }));
+  });
+
+  result.mentorDates = Object.fromEntries(Object.entries(asPlainObject(input.mentorDates)).flatMap(([label, list]) => {
+    const mentor = String(label).trim();
+    if (!mentor || !result.mentors.includes(mentor) || !Array.isArray(list)) return [];
+    const values = [...new Set(list.map(value => String(value).trim()).filter(Boolean))];
+    if (!values.length) return [];
+    if (values.length > LIST_MAX_ITEMS || values.some(value => value.length > LIST_MAX_LENGTH)) throw new Error("Слишком много дат или слишком длинный текст");
+    return [[mentor, values]];
+  }));
 
   result.eventName = String(input.eventName || "").trim();
   result.price = String(input.price || "").trim();
@@ -1146,11 +1233,14 @@ module.exports = {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
   callDoctorSchedule,
+  datesForMentor,
   doctorSlotLabel,
   isAdmin,
   isDoctorProgram,
   normalizeConfig,
   normalizeDoctorSlots,
+  normalizeMentorDates,
+  normalizeNotices,
   normalizeSessionStore,
   parseAdminTarget,
   registrationStopMessage,
