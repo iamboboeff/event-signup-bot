@@ -85,13 +85,11 @@ function loadConfig() {
 }
 
 function normalizeConfig(config, fallback = readJson(DEFAULT_CONFIG_PATH, {})) {
-  const source = config && typeof config === "object" ? config : {};
-  const normalized = { ...fallback, ...source };
-  ["cities", "programs", "mentors", "dates"].forEach(key => {
-    if (!Array.isArray(source[key]) || !source[key].length) normalized[key] = fallback[key];
-  });
-  normalized.notices = normalizeNotices(normalized.notices, normalized);
-  normalized.mentorDates = normalizeMentorDates(normalized.mentorDates, normalized);
+  const source = toCurrentConfig(config, fallback);
+  const base = toCurrentConfig(fallback);
+  const normalized = { ...base, ...source };
+  normalized.cities = normalizeCities(source.cities);
+  if (!normalized.cities.length) normalized.cities = normalizeCities(base.cities);
   return normalized;
 }
 
@@ -99,33 +97,100 @@ function asPlainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-// Системные сообщения хранятся по видимому тексту варианта. Привязываем их к
-// актуальному списку: переименовали вариант или удалили — сообщение уходит с ним.
-function normalizeNotices(input, config) {
-  const source = asPlainObject(input);
-  const result = {};
-  NOTICE_KEYS.forEach(key => {
-    const byChoice = new Map(Object.entries(asPlainObject(source[key]))
-      .map(([label, text]) => [normalizeChoice(label), String(text == null ? "" : text).trim()]));
-    result[key] = Object.fromEntries((Array.isArray(config[key]) ? config[key] : [])
-      .map(option => [option, (byChoice.get(normalizeChoice(option)) || "").slice(0, NOTICE_MAX_LENGTH)])
-      .filter(([, text]) => text));
-  });
-  return result;
+function cleanText(value, maxLength) {
+  return String(value == null ? "" : value).trim().slice(0, maxLength);
 }
 
-// Свои даты наставника. Пустой список равен его отсутствию — тогда работает общий.
-function normalizeMentorDates(input, config) {
-  const byChoice = new Map(Object.entries(asPlainObject(input))
-    .map(([label, list]) => [normalizeChoice(label), list]));
-  return Object.fromEntries((Array.isArray(config.mentors) ? config.mentors : []).flatMap(mentor => {
-    const list = byChoice.get(normalizeChoice(mentor));
-    if (!Array.isArray(list)) return [];
-    const values = [...new Set(list.map(value => String(value).trim()).filter(Boolean))]
-      .slice(0, LIST_MAX_ITEMS)
-      .map(value => value.slice(0, LIST_MAX_LENGTH));
-    return values.length ? [[mentor, values]] : [];
+// Город, направление или наставник: название и системное сообщение. Непустое
+// сообщение закрывает запись на варианте. Строки без названия и повторы при
+// чтении отбрасываем: бот всё равно не отличил бы их друг от друга.
+function normalizeOptions(list, extra) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  return list.flatMap(raw => {
+    const option = asPlainObject(raw);
+    const name = cleanText(option.name, LIST_MAX_LENGTH);
+    if (!name || seen.has(normalizeChoice(name))) return [];
+    seen.add(normalizeChoice(name));
+    return [{ name, notice: cleanText(option.notice, NOTICE_MAX_LENGTH), ...extra(option) }];
+  }).slice(0, LIST_MAX_ITEMS);
+}
+
+function normalizeDates(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.map(value => cleanText(value, LIST_MAX_LENGTH)).filter(Boolean))].slice(0, LIST_MAX_ITEMS);
+}
+
+// Платное направление показывает участнику свою стоимость и реквизиты, бесплатное
+// записывает сразу. Тексты бесплатного не храним: участник их всё равно не увидит.
+function normalizeProgramPayment(program) {
+  const paid = program.paid === true;
+  return {
+    paid,
+    price: paid ? cleanText(program.price, PRICE_MAX_LENGTH) : "",
+    payDetails: paid ? cleanText(program.payDetails, PAY_DETAILS_MAX_LENGTH) : ""
+  };
+}
+
+// У каждого города свои направления и наставники, у направления — своя оплата,
+// у наставника — свои даты.
+function normalizeCities(list) {
+  return normalizeOptions(list, city => ({
+    programs: normalizeOptions(city.programs, normalizeProgramPayment),
+    mentors: normalizeOptions(city.mentors, mentor => ({ dates: normalizeDates(mentor.dates) }))
   }));
+}
+
+function isLegacyConfig(source) {
+  if (Array.isArray(source.cities) && source.cities.length) {
+    return source.cities.some(city => typeof city === "string");
+  }
+  return LEGACY_CONFIG_KEYS.some(key => key in source);
+}
+
+// Старые общие списки превращаем в города без потерь: каждый город получает
+// свою копию направлений и наставников, наставник — личные даты или общий список.
+function migrateLegacyCities(source) {
+  const notices = "notices" in source ? asPlainObject(source.notices) : LEGACY_DEFAULT_NOTICES;
+  const noticeFor = (key, name) => cleanText(lookupByChoice(asPlainObject(notices[key]), name), NOTICE_MAX_LENGTH);
+  const strings = value => (Array.isArray(value) ? value : []).filter(item => typeof item === "string");
+  const sharedDates = strings(source.dates);
+  return strings(source.cities).map(city => ({
+    name: city,
+    notice: noticeFor("cities", city),
+    programs: strings(source.programs).map(name => ({ name, notice: noticeFor("programs", name) })),
+    mentors: strings(source.mentors).map(name => {
+      const own = lookupByChoice(asPlainObject(source.mentorDates), name);
+      return { name, notice: noticeFor("mentors", name), dates: Array.isArray(own) && own.length ? [...own] : [...sharedDates] };
+    })
+  }));
+}
+
+// Раньше стоимость и реквизиты были общими, а платным было всё. Направления без
+// поля paid остаются платными на прежних условиях: общих из source или defaults.
+function withLegacyPayment(cities, source, defaults = {}) {
+  if (!Array.isArray(cities)) return cities;
+  const payment = Object.fromEntries(LEGACY_PAYMENT_KEYS.map(key => [key, key in source ? source[key] : defaults[key]]));
+  return cities.map(raw => {
+    const city = asPlainObject(raw);
+    if (!Array.isArray(city.programs)) return raw;
+    return {
+      ...city,
+      programs: city.programs.map(item => {
+        const program = asPlainObject(item);
+        return "paid" in program ? item : { ...program, paid: true, ...payment };
+      })
+    };
+  });
+}
+
+function toCurrentConfig(config, fallback = {}) {
+  const source = asPlainObject(config);
+  const current = { ...source };
+  [...LEGACY_CONFIG_KEYS, ...LEGACY_PAYMENT_KEYS].forEach(key => delete current[key]);
+  if (isLegacyConfig(source)) current.cities = migrateLegacyCities(source);
+  if (Array.isArray(current.cities)) current.cities = withLegacyPayment(current.cities, source, asPlainObject(fallback));
+  return current;
 }
 
 function saveConfig(config) {
@@ -175,17 +240,23 @@ function saveAdminModes(modes) {
   writeJsonAtomic(ADMIN_MODES_PATH, [...modes]);
 }
 
-// Шаги с кнопками: тип из callback_data → список настроек и подпись в чате.
-const CHOICE_STEPS = {
-  city: { listKey: "cities", label: "Город" },
-  program: { listKey: "programs", label: "Направление" },
-  mentor: { listKey: "mentors", label: "Наставник" }
-};
-// Для этих списков админка умеет задавать системное сообщение вместо записи.
-const NOTICE_KEYS = ["cities", "programs", "mentors"];
+// Лимиты настроек из админки — с запасом для реальной записи.
 const NOTICE_MAX_LENGTH = 400;
+const PRICE_MAX_LENGTH = 80;
+const PAY_DETAILS_MAX_LENGTH = 1200;
 const LIST_MAX_ITEMS = 40;
 const LIST_MAX_LENGTH = 120;
+// До разделения по городам все города делили одни списки строк, а сообщения
+// и личные даты наставников лежали в словарях notices и mentorDates.
+const LEGACY_CONFIG_KEYS = ["programs", "mentors", "dates", "notices", "mentorDates"];
+// До оплаты по направлениям стоимость и реквизиты лежали в корне настроек.
+const LEGACY_PAYMENT_KEYS = ["price", "payDetails"];
+// Так эти варианты были закрыты в коде, пока сообщения не стали настройкой:
+// сохранённые тогда настройки без notices должны остаться с теми же ограничениями.
+const LEGACY_DEFAULT_NOTICES = {
+  cities: { "Москва": "Запись на мероприятия в Москве откроется позже" },
+  programs: { "Привычка Быть счастливой": "Скоро…" }
+};
 
 const REGISTRATION_STEPS = new Set(["city", "program", "name", "mentor", "doctor_slot", "date", "sub"]);
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -273,12 +344,15 @@ function deleteSession(userId) {
   saveSessions(sessions);
 }
 
+const CITY_NOT_READY_MESSAGE = "Запись в этом городе пока не открыта.";
+const SETTINGS_CHANGED_MESSAGE = "Настройки записи изменились. Нажмите «📝 Записаться», чтобы начать заново.";
+
 function normalizeChoice(value) {
   return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ru");
 }
 
-// Вариант в настройках хранится по видимому тексту, а участник мог выбрать его
-// до переименования — сравниваем по нормализованному виду.
+// Старые настройки хранили сообщения и даты в словарях по видимому тексту
+// варианта — сравниваем по нормализованному виду, без учёта регистра и пробелов.
 function lookupByChoice(map, value) {
   if (!map || typeof map !== "object") return undefined;
   const target = normalizeChoice(value);
@@ -286,19 +360,22 @@ function lookupByChoice(map, value) {
   return found === undefined ? undefined : map[found];
 }
 
-// Если для варианта в админке задано системное сообщение («Скоро…»), запись
-// на нём останавливается: показываем текст и закрываем анкету.
-function registrationStopMessage(config, type, value) {
-  const step = CHOICE_STEPS[type];
-  if (!step) return null;
-  const notice = lookupByChoice(config && config.notices ? config.notices[step.listKey] : null, value);
-  return notice ? String(notice) : null;
+// Анкета помнит выбор по названию: пока участник отвечал, админ мог поменять
+// порядок кнопок, поэтому ищем вариант по имени, а не по индексу.
+function findOption(list, name) {
+  const target = normalizeChoice(name);
+  return (Array.isArray(list) ? list : []).find(option => normalizeChoice(option.name) === target) || null;
 }
 
-// Даты наставника: свои, если заданы в админке, иначе общий список.
-function datesForMentor(config, mentor) {
-  const own = lookupByChoice(config ? config.mentorDates : null, mentor);
-  return Array.isArray(own) && own.length ? own : ((config && config.dates) || []);
+function optionNames(list) {
+  return list.map(option => option.name);
+}
+
+// Почему в город нельзя записаться: сообщение из админки или город не заполнен.
+function cityStopMessage(city) {
+  if (city.notice) return city.notice;
+  if (!city.programs.length || !city.mentors.length) return CITY_NOT_READY_MESSAGE;
+  return null;
 }
 
 function isDoctorProgram(value) {
@@ -446,15 +523,28 @@ async function startRegistration(ctx) {
   setSession(ctx.from.id, { step: "city", draft: {} });
   await ctx.reply(
     `Здравствуйте! Это запись на «${cfg.eventName}».\n\nСначала выберите город:`,
-    { reply_markup: choiceKeyboard(cfg.cities, "city") }
+    { reply_markup: choiceKeyboard(optionNames(cfg.cities), "city") }
   );
 }
 
+// Вариант закрыт: фиксируем выбор в сообщении и показываем текст из админки.
+async function stopRegistration(ctx, summary, message) {
+  await ctx.editMessageText(summary);
+  deleteSession(ctx.from.id);
+  await ctx.reply(message, { reply_markup: mainMenu });
+}
+
+// Город или наставник из анкеты пропал из настроек — по старым кнопкам не продолжить.
+async function restartRegistration(ctx) {
+  deleteSession(ctx.from.id);
+  await ctx.reply(SETTINGS_CHANGED_MESSAGE, { reply_markup: mainMenu });
+}
+
 // Собирает текст списка и инлайн-кнопки удаления (для админа).
-// Показываем: абонемент, подтверждённую оплату и «заявил об оплате» (с пометкой ожидания).
+// Показываем: бесплатные, абонемент, подтверждённую оплату и «заявил об оплате» (с пометкой ожидания).
 // Возвращает { text, keyboard } или null, если записей нет.
 async function buildListView(arg) {
-  const regs = (await getRegs()).filter(r => r.sub || r.paid || r.claimed);
+  const regs = (await getRegs()).filter(r => r.free || r.sub || r.paid || r.claimed);
   const filtered = arg
     ? regs.filter(r => r.date.toLowerCase() === arg.toLowerCase())
     : regs;
@@ -468,9 +558,10 @@ async function buildListView(arg) {
     const list = byDay[day];
     msg += `📋 ${day} (${list.length}):\n`;
     list.forEach((r, i) => {
-      const pending = !r.sub && !r.paid && r.claimed ? " (ожидание оплаты)" : "";
+      const pending = !r.free && !r.sub && !r.paid && r.claimed ? " (ожидание оплаты)" : "";
       const route = [r.city, r.program, r.mentor].filter(Boolean).join(" — ");
-      msg += `${i + 1}. ${r.name}${route ? " — " + route : ""} — ${r.sub ? "абонемент" : "оплата"}${pending}\n`;
+      const kind = r.free ? "бесплатно" : r.sub ? "абонемент" : "оплата";
+      msg += `${i + 1}. ${r.name}${route ? " — " + route : ""} — ${kind}${pending}\n`;
       kb.text(`🗑 ${r.name}`, `del:${r.id}`).row();
     });
     msg += "\n";
@@ -540,16 +631,27 @@ async function requireAdminCommandAccess(ctx) {
   return true;
 }
 
+// Стоимость запоминается в заявке. У заявок, созданных до оплаты по
+// направлениям, её нет — берём текущую стоимость их направления.
+function registrationPrice(reg, cfg) {
+  if (typeof reg.price === "string") return reg.price;
+  const city = findOption(cfg.cities, reg.city);
+  const program = city ? findOption(city.programs, reg.program) : null;
+  return program ? program.price : "";
+}
+
 // Текст уведомления о записи (для группы) с учётом статуса оплаты.
 function groupNoteText(reg, priceText) {
   let t = `🔔 Запись\n${reg.name}`;
   if (reg.city) t += `\nГород: ${reg.city}`;
   if (reg.program) t += `\nНаправление: ${reg.program}`;
   t += `\nДата: ${reg.date}\nНаставник: ${reg.mentor}`;
-  if (reg.sub) {
+  if (reg.free) {
+    t += `\nУчастие: бесплатное направление`;
+  } else if (reg.sub) {
     t += `\nУчастие: по абонементу (бесплатно)`;
   } else {
-    t += `\nУчастие: оплата ${priceText}`;
+    t += `\nУчастие: оплата${priceText ? " " + priceText : ""}`;
     if (reg.paid) t += `\n✅ Оплачено${reg.paidBy ? " · отметил " + reg.paidBy : ""}`;
     else if (reg.claimed) t += `\n🙋 Сообщил(а) об оплате — проверьте и подтвердите`;
     else t += `\n⏳ Оплата ожидается`;
@@ -559,7 +661,7 @@ function groupNoteText(reg, priceText) {
 
 // Кнопка отметки оплаты (только для платных записей).
 function payKeyboard(reg) {
-  if (reg.sub) return undefined;
+  if (reg.free || reg.sub) return undefined;
   return new InlineKeyboard().text(
     reg.paid ? "↩️ Отменить отметку" : "✅ Отметить оплаченным",
     `pay:${reg.paid ? 0 : 1}:${reg.id}`
@@ -588,7 +690,7 @@ async function handlePayToggle(ctx, data) {
 
   const cfg = await getConfig();
   try {
-    await ctx.editMessageText(groupNoteText(reg, cfg.price), { reply_markup: payKeyboard(reg) });
+    await ctx.editMessageText(groupNoteText(reg, registrationPrice(reg, cfg)), { reply_markup: payKeyboard(reg) });
   } catch (e) { /* сообщение могли удалить */ }
 
   // сообщить записавшемуся
@@ -630,11 +732,11 @@ async function handlePaidClaim(ctx, data) {
     if (reg.groupMsgId) {
       // на случай повторного нажатия — просто обновляем статус существующего сообщения
       try {
-        await bot.api.editMessageText(GROUP_CHAT_ID, reg.groupMsgId, groupNoteText(reg, cfg.price), { reply_markup: payKeyboard(reg) });
+        await bot.api.editMessageText(GROUP_CHAT_ID, reg.groupMsgId, groupNoteText(reg, registrationPrice(reg, cfg)), { reply_markup: payKeyboard(reg) });
       } catch (e) { /* ignore */ }
     } else {
       try {
-        const sent = await bot.api.sendMessage(GROUP_CHAT_ID, groupNoteText(reg, cfg.price), { reply_markup: payKeyboard(reg) });
+        const sent = await bot.api.sendMessage(GROUP_CHAT_ID, groupNoteText(reg, registrationPrice(reg, cfg)), { reply_markup: payKeyboard(reg) });
         reg.groupMsgId = sent.message_id;
         await updateReg(reg.id, "groupMsgId", sent.message_id);
       } catch (e) { console.error("Не удалось отправить в группу:", e.message); }
@@ -811,14 +913,16 @@ bot.on("message:text", async (ctx) => {
   if (s.step !== "name") return; // на шагах с кнопками ждём нажатия, текст игнорируем
 
   if (text.length < 2) { await ctx.reply("Пожалуйста, введите Фамилию и Имя:"); return; }
+  const cfg = await getConfig();
+  const city = findOption(cfg.cities, s.draft.city);
+  if (!city || !city.mentors.length) { await restartRegistration(ctx); return; }
   s.draft.name = text;
   s.step = "mentor";
   saveSession(ctx.from.id, s);
-  const cfg = await getConfig();
   const label = isDoctorProgram(s.draft.program) && isDoctorScheduleConfigured()
     ? "Выберите консультанта:"
     : "Выберите наставника:";
-  await ctx.reply(label, { reply_markup: choiceKeyboard(cfg.mentors, "mentor") });
+  await ctx.reply(label, { reply_markup: choiceKeyboard(optionNames(city.mentors), "mentor") });
 });
 
 // Шаги анкеты с кнопками
@@ -848,37 +952,58 @@ bot.on("callback_query:data", async (ctx) => {
   const [type, idxStr] = ctx.callbackQuery.data.split(":");
   const idx = parseInt(idxStr, 10);
 
-  const step = CHOICE_STEPS[type];
-  const selectedChoice = step ? cfg[step.listKey][idx] : null;
-  const stopMessage = selectedChoice && registrationStopMessage(cfg, type, selectedChoice);
-  if (stopMessage && (!s || s.step === type)) {
-    await ctx.editMessageText(`${step.label}: ${selectedChoice}`);
-    deleteSession(ctx.from.id);
-    await ctx.reply(stopMessage, { reply_markup: mainMenu });
+  // Кнопка города могла остаться в старом сообщении: закрытый или незаполненный
+  // город отвечает своим сообщением, даже если анкеты уже нет.
+  const tappedCity = type === "city" ? cfg.cities[idx] : null;
+  const cityStop = tappedCity ? cityStopMessage(tappedCity) : null;
+  if (cityStop && (!s || s.step === "city")) {
+    await stopRegistration(ctx, `Город: ${tappedCity.name}`, cityStop);
     return;
   }
 
   if (!s) { await ctx.reply("Нажмите «📝 Записаться», чтобы начать.", { reply_markup: mainMenu }); return; }
 
-  if (type === "city" && s.step === "city" && cfg.cities[idx]) {
-    s.draft.city = cfg.cities[idx];
+  // Направления, наставники и даты живут внутри города, выбранного в анкете.
+  const city = s.step === "city" ? null : findOption(cfg.cities, s.draft.city);
+  if (s.step !== "city" && !city) { await restartRegistration(ctx); return; }
+
+  if (type === "city" && s.step === "city" && tappedCity) {
+    s.draft.city = tappedCity.name;
     await ctx.editMessageText(`Город: ${s.draft.city}`);
     s.step = "program";
     saveSession(ctx.from.id, s);
     await ctx.reply("Выберите направление:", {
-      reply_markup: choiceKeyboard(cfg.programs, "program", true)
+      reply_markup: choiceKeyboard(optionNames(tappedCity.programs), "program", true)
     });
 
-  } else if (type === "program" && s.step === "program" && cfg.programs[idx]) {
-    s.draft.program = cfg.programs[idx];
+  } else if (type === "program" && s.step === "program" && city.programs[idx]) {
+    const program = city.programs[idx];
+    if (program.notice) {
+      await stopRegistration(ctx, `Направление: ${program.name}`, program.notice);
+      return;
+    }
+    s.draft.program = program.name;
     await ctx.editMessageText(`Направление: ${s.draft.program}`);
     s.step = "name";
     saveSession(ctx.from.id, s);
     await ctx.reply("Напишите вашу Фамилию и Имя:", { reply_markup: mainMenu });
 
-  } else if (type === "mentor" && s.step === "mentor" && cfg.mentors[idx]) {
-    s.draft.mentor = cfg.mentors[idx];
-    if (isDoctorProgram(s.draft.program) && isDoctorScheduleConfigured()) {
+  } else if (type === "mentor" && s.step === "mentor" && city.mentors[idx]) {
+    const mentor = city.mentors[idx];
+    if (mentor.notice) {
+      await stopRegistration(ctx, `Наставник: ${mentor.name}`, mentor.notice);
+      return;
+    }
+    const doctorFlow = isDoctorProgram(s.draft.program) && isDoctorScheduleConfigured();
+    if (!doctorFlow && !mentor.dates.length) {
+      // Анкету не обрываем: у другого наставника даты могут быть.
+      await ctx.editMessageText(`У наставника «${mentor.name}» пока нет дат для записи. Выберите другого наставника:`, {
+        reply_markup: choiceKeyboard(optionNames(city.mentors), "mentor")
+      });
+      return;
+    }
+    s.draft.mentor = mentor.name;
+    if (doctorFlow) {
       s.step = "doctor_slot";
       saveSession(ctx.from.id, s);
       await ctx.editMessageText(`Консультант: ${s.draft.mentor}`);
@@ -894,9 +1019,7 @@ bot.on("callback_query:data", async (ctx) => {
       s.step = "date";
       saveSession(ctx.from.id, s);
       await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
-      await ctx.reply("Выберите дату:", {
-        reply_markup: choiceKeyboard(datesForMentor(cfg, s.draft.mentor), "date")
-      });
+      await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(mentor.dates, "date") });
     }
 
   } else if (type === "doctor_refresh" && s.step === "doctor_slot") {
@@ -946,10 +1069,19 @@ bot.on("callback_query:data", async (ctx) => {
     }
 
   } else if (type === "date" && s.step === "date") {
-    // Даты могли смениться, пока участник думал: молча игнорируем чужой индекс.
-    const mentorDates = datesForMentor(cfg, s.draft.mentor);
-    if (!mentorDates[idx]) return;
-    s.draft.date = mentorDates[idx];
+    const mentor = findOption(city.mentors, s.draft.mentor);
+    const program = findOption(city.programs, s.draft.program);
+    if (!mentor || !program) { await restartRegistration(ctx); return; }
+    // Даты могли смениться, пока участник думал: чужой индекс молча игнорируем.
+    if (!mentor.dates[idx]) return;
+    s.draft.date = mentor.dates[idx];
+    // Бесплатному направлению не нужны ни абонемент, ни оплата — записываем сразу.
+    if (!program.paid) {
+      await ctx.editMessageText(`Дата: ${s.draft.date}`);
+      await finish(ctx, s.draft, program);
+      deleteSession(ctx.from.id);
+      return;
+    }
     s.step = "sub";
     saveSession(ctx.from.id, s);
     await ctx.editMessageText(`Дата: ${s.draft.date}`);
@@ -957,15 +1089,24 @@ bot.on("callback_query:data", async (ctx) => {
     await ctx.reply("Вы участвуете по абонементу?", { reply_markup: k });
 
   } else if (type === "sub" && s.step === "sub") {
+    const program = findOption(city.programs, s.draft.program);
+    if (!program) { await restartRegistration(ctx); return; }
     s.draft.sub = idx === 1;
     await ctx.editMessageText(`По абонементу: ${s.draft.sub ? "Да" : "Нет"}`);
-    await finish(ctx, s.draft);
+    await finish(ctx, s.draft, program);
     deleteSession(ctx.from.id);
   }
 });
 
-async function finish(ctx, draft) {
-  const cfg = await getConfig();
+// Сообщение об оплате: стоимость и реквизиты выбранного направления.
+function paymentText(program) {
+  const price = program.price ? `Стоимость участия — ${program.price}.\n` : "";
+  const details = program.payDetails ? `\n\n${program.payDetails}` : "";
+  return `${price}Оплата переводом по реквизитам ниже. После перевода нажмите «Я оплатил(а)» 👇${details}`;
+}
+
+async function finish(ctx, draft, program) {
+  const free = !program.paid;
   const reg = {
     id: Date.now(),
     name: draft.name,
@@ -973,31 +1114,35 @@ async function finish(ctx, draft) {
     program: draft.program,
     mentor: draft.mentor,
     date: draft.date,
-    sub: draft.sub,
+    sub: !free && draft.sub === true,
+    free,
+    // Стоимость фиксируем в заявке: админ может поменять её, пока заявка ждёт оплаты.
+    price: free ? "" : program.price,
     userId: ctx.from.id,
     username: ctx.from.username || "",
     ts: new Date().toISOString()
   };
   await createReg(reg);
 
-  if (draft.sub) {
-    await ctx.reply("Отлично! По абонементу участие бесплатное.\nВы записаны ✅");
+  if (free || reg.sub) {
+    await ctx.reply(free
+      ? "Участие в этом направлении бесплатное.\nВы записаны ✅"
+      : "Отлично! По абонементу участие бесплатное.\nВы записаны ✅");
     await ctx.reply(
       "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
       { reply_markup: mainMenu }
     );
   } else {
-    await ctx.reply(
-      `Стоимость участия — ${cfg.price}.\nОплата переводом по реквизитам ниже. После перевода нажмите «Я оплатил(а)» 👇\n\n${cfg.payDetails}`,
-      { reply_markup: new InlineKeyboard().text("✅ Я оплатил(а)", `claim:${reg.id}`) }
-    );
+    await ctx.reply(paymentText(program), {
+      reply_markup: new InlineKeyboard().text("✅ Я оплатил(а)", `claim:${reg.id}`)
+    });
   }
 
-  // Уведомление в группу: для абонемента — сразу (запись подтверждена, оплаты нет).
+  // Уведомление в группу: для бесплатных и абонемента — сразу (запись подтверждена, оплаты нет).
   // Для платных уведомление НЕ шлём здесь — оно уйдёт только после нажатия «Я оплатил(а)».
-  if (GROUP_CHAT_ID && reg.sub) {
+  if (GROUP_CHAT_ID && (free || reg.sub)) {
     try {
-      const sent = await bot.api.sendMessage(GROUP_CHAT_ID, groupNoteText(reg, cfg.price), { reply_markup: payKeyboard(reg) });
+      const sent = await bot.api.sendMessage(GROUP_CHAT_ID, groupNoteText(reg, reg.price), { reply_markup: payKeyboard(reg) });
       reg.groupMsgId = sent.message_id;
       await updateReg(reg.id, "groupMsgId", sent.message_id);
     } catch (e) { console.error("Не удалось отправить в группу:", e.message); }
@@ -1033,7 +1178,8 @@ function readRequestJson(req) {
     req.setEncoding("utf8");
     req.on("data", chunk => {
       body += chunk;
-      if (body.length > 64 * 1024) reject(new Error("Слишком большой запрос"));
+      // Настройки вложены по городам — даём запас, но не бесконечный.
+      if (body.length > 256 * 1024) reject(new Error("Слишком большой запрос"));
     });
     req.on("end", () => {
       try { resolve(body ? JSON.parse(body) : {}); }
@@ -1082,48 +1228,72 @@ function authenticateAdminRequest(req) {
 
 function sanitizeConfigInput(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Некорректные настройки");
-  const listKeys = ["cities", "programs", "dates", "mentors"];
-  const result = {};
-
-  listKeys.forEach(key => {
-    if (!Array.isArray(input[key])) throw new Error(`Поле «${key}» должно быть списком`);
-    const values = [...new Set(input[key].map(value => String(value).trim()).filter(Boolean))];
-    if (!values.length) throw new Error("В каждом разделе нужен хотя бы один вариант");
-    if (values.length > LIST_MAX_ITEMS || values.some(value => value.length > LIST_MAX_LENGTH)) throw new Error("Слишком много вариантов или слишком длинный текст");
-    result[key] = values;
-  });
-
-  // Системные сообщения и личные даты наставников привязаны к вариантам выше:
-  // всё, что не нашлось в списках, отбрасываем, чтобы настройки не копили мусор.
-  const notices = asPlainObject(input.notices);
-  result.notices = {};
-  NOTICE_KEYS.forEach(key => {
-    result.notices[key] = Object.fromEntries(Object.entries(asPlainObject(notices[key])).flatMap(([label, text]) => {
-      const option = String(label).trim();
-      const message = String(text == null ? "" : text).trim();
-      if (!option || !message || !result[key].includes(option)) return [];
-      if (message.length > NOTICE_MAX_LENGTH) throw new Error(`Системное сообщение длиннее ${NOTICE_MAX_LENGTH} символов`);
-      return [[option, message]];
-    }));
-  });
-
-  result.mentorDates = Object.fromEntries(Object.entries(asPlainObject(input.mentorDates)).flatMap(([label, list]) => {
-    const mentor = String(label).trim();
-    if (!mentor || !result.mentors.includes(mentor) || !Array.isArray(list)) return [];
-    const values = [...new Set(list.map(value => String(value).trim()).filter(Boolean))];
-    if (!values.length) return [];
-    if (values.length > LIST_MAX_ITEMS || values.some(value => value.length > LIST_MAX_LENGTH)) throw new Error("Слишком много дат или слишком длинный текст");
-    return [[mentor, values]];
-  }));
-
-  result.eventName = String(input.eventName || "").trim();
-  result.price = String(input.price || "").trim();
-  result.payDetails = String(input.payDetails || "").trim();
+  const result = { eventName: String(input.eventName || "").trim() };
   if (!result.eventName) throw new Error("Укажите название мероприятия");
-  if (result.eventName.length > 120 || result.price.length > 80 || result.payDetails.length > 1200) {
-    throw new Error("Одно из полей содержит слишком длинный текст");
-  }
+  if (result.eventName.length > 120) throw new Error("Название мероприятия длиннее 120 символов");
+
+  // Панель, открытая до обновления, ещё присылает общую стоимость в корне:
+  // её направления остаются платными, а не становятся бесплатными молча.
+  result.cities = sanitizeOptions(withLegacyPayment(input.cities, input), {
+    missing: "Заполните название города",
+    duplicate: name => `Город «${name}» указан дважды`,
+    tooMany: "Слишком много городов"
+  }, (city, cityName) => ({
+    programs: sanitizeOptions(city.programs, {
+      missing: `В городе «${cityName}» есть направление без названия`,
+      duplicate: name => `В городе «${cityName}» направление «${name}» указано дважды`,
+      tooMany: `В городе «${cityName}» слишком много направлений`
+    }, (program, programName) => sanitizeProgramPayment(program, `${cityName}, ${programName}`)),
+    mentors: sanitizeOptions(city.mentors, {
+      missing: `В городе «${cityName}» есть наставник без имени`,
+      duplicate: name => `В городе «${cityName}» наставник «${name}» указан дважды`,
+      tooMany: `В городе «${cityName}» слишком много наставников`
+    }, (mentor, mentorName) => ({ dates: sanitizeDates(mentor.dates, `${cityName}, ${mentorName}`) }))
+  }));
+  if (!result.cities.length) throw new Error("Нужен хотя бы один город");
   return result;
+}
+
+// При сохранении, в отличие от чтения файла, ничего не выбрасываем молча: внутри
+// города и наставника целые списки, и потерять их без предупреждения нельзя.
+function sanitizeOptions(list, errors, extra) {
+  if (list == null) return [];
+  if (!Array.isArray(list)) throw new Error("Некорректные настройки");
+  if (list.length > LIST_MAX_ITEMS) throw new Error(errors.tooMany);
+  const seen = new Set();
+  return list.map(raw => {
+    const option = asPlainObject(raw);
+    const name = String(option.name == null ? "" : option.name).trim();
+    if (!name) throw new Error(errors.missing);
+    if (name.length > LIST_MAX_LENGTH) throw new Error(`Название «${name.slice(0, 40)}…» длиннее ${LIST_MAX_LENGTH} символов`);
+    if (seen.has(normalizeChoice(name))) throw new Error(errors.duplicate(name));
+    seen.add(normalizeChoice(name));
+    const notice = String(option.notice == null ? "" : option.notice).trim();
+    if (notice.length > NOTICE_MAX_LENGTH) throw new Error(`Сообщение для «${name}» длиннее ${NOTICE_MAX_LENGTH} символов`);
+    return { name, notice, ...extra(option, name) };
+  });
+}
+
+function sanitizeDates(list, owner) {
+  if (list == null) return [];
+  if (!Array.isArray(list)) throw new Error("Некорректные настройки");
+  const values = [...new Set(list.map(value => String(value == null ? "" : value).trim()).filter(Boolean))];
+  if (values.length > LIST_MAX_ITEMS) throw new Error(`${owner}: слишком много дат`);
+  if (values.some(value => value.length > LIST_MAX_LENGTH)) throw new Error(`${owner}: дата длиннее ${LIST_MAX_LENGTH} символов`);
+  return values;
+}
+
+// Платное направление без стоимости или реквизитов оставило бы участника без
+// инструкции, поэтому такое сохранение отклоняем.
+function sanitizeProgramPayment(program, owner) {
+  if (program.paid !== true) return { paid: false, price: "", payDetails: "" };
+  const price = String(program.price == null ? "" : program.price).trim();
+  const payDetails = String(program.payDetails == null ? "" : program.payDetails).trim();
+  if (!price) throw new Error(`${owner}: укажите стоимость или сделайте направление бесплатным`);
+  if (!payDetails) throw new Error(`${owner}: укажите, как оплатить`);
+  if (price.length > PRICE_MAX_LENGTH) throw new Error(`${owner}: стоимость длиннее ${PRICE_MAX_LENGTH} символов`);
+  if (payDetails.length > PAY_DETAILS_MAX_LENGTH) throw new Error(`${owner}: реквизиты длиннее ${PAY_DETAILS_MAX_LENGTH} символов`);
+  return { paid: true, price, payDetails };
 }
 
 async function handleHttpRequest(req, res, webhookHandle) {
@@ -1233,17 +1403,17 @@ module.exports = {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
   callDoctorSchedule,
-  datesForMentor,
+  cityStopMessage,
   doctorSlotLabel,
+  findOption,
+  groupNoteText,
   isAdmin,
   isDoctorProgram,
   normalizeConfig,
   normalizeDoctorSlots,
-  normalizeMentorDates,
-  normalizeNotices,
   normalizeSessionStore,
   parseAdminTarget,
-  registrationStopMessage,
+  registrationPrice,
   resolveAdminWebappUrl,
   sanitizeConfigInput,
   validateTelegramInitData

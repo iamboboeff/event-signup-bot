@@ -16,15 +16,17 @@ const {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
   callDoctorSchedule,
-  datesForMentor,
+  cityStopMessage,
   doctorSlotLabel,
+  findOption,
+  groupNoteText,
   isAdmin,
   isDoctorProgram,
   normalizeConfig,
   normalizeSessionStore,
   normalizeDoctorSlots,
   parseAdminTarget,
-  registrationStopMessage,
+  registrationPrice,
   resolveAdminWebappUrl,
   sanitizeConfigInput,
   validateTelegramInitData
@@ -71,45 +73,98 @@ test("ordinary Telegram menu exposes only registration", () => {
   assert.equal(ADMIN_BOT_COMMANDS.some(item => item.command === "addadmin"), true);
 });
 
-test("registration stops on the options the admin marked with a notice", () => {
-  // Настройки по умолчанию: Москва и «Привычка Быть счастливой» закрыты.
-  const config = normalizeConfig({});
-  assert.equal(
-    registrationStopMessage(config, "city", " Москва "),
-    "Запись на мероприятия в Москве откроется позже"
-  );
-  assert.equal(
-    registrationStopMessage(config, "program", "Привычка Быть счастливой"),
-    "Скоро…"
-  );
-  assert.equal(registrationStopMessage(config, "city", "Питер"), null);
-  assert.equal(registrationStopMessage(config, "program", "Занятия аромаклуба"), null);
-
-  // Всё, что задано в админке, работает так же — включая наставников.
-  const edited = normalizeConfig({
-    ...config,
-    notices: { cities: {}, programs: {}, mentors: { "Золото": "Наставник в отпуске" } }
-  });
-  assert.equal(registrationStopMessage(edited, "city", "Москва"), null);
-  assert.equal(registrationStopMessage(edited, "mentor", "золото"), "Наставник в отпуске");
-});
-
-test("mentor keeps personal dates and falls back to the shared list", () => {
-  const config = normalizeConfig({ mentorDates: { "Золото": ["Вторник", "Четверг"] } });
-  assert.deepEqual(datesForMentor(config, "золото"), ["Вторник", "Четверг"]);
-  assert.deepEqual(datesForMentor(config, "Серебро"), config.dates);
-  assert.deepEqual(datesForMentor(config, "Удалённый наставник"), config.dates);
-});
-
-test("notices and mentor dates are dropped when their option disappears", () => {
+test("settings saved before the split by city move into every city without losses", () => {
   const config = normalizeConfig({
-    cities: ["Питер"],
-    mentors: ["Серебро"],
-    notices: { cities: { "Москва": "Скоро" }, programs: {}, mentors: {} },
-    mentorDates: { "Золото": ["Вторник"], "Серебро": [" ", ""] }
+    eventName: "Аромаклуб",
+    price: "2 000 ₽",
+    payDetails: "СБП",
+    cities: ["Питер", "Москва"],
+    programs: ["Аромаклуб", "Привычка Быть счастливой"],
+    mentors: ["Наталья", "Ольга"],
+    dates: ["Вторник", "Четверг"],
+    notices: { cities: { "Москва": "Позже" }, programs: { "привычка быть счастливой": "Скоро…" }, mentors: {} },
+    mentorDates: { "Ольга": ["Среда"] }
   });
-  assert.deepEqual(config.notices.cities, {});
-  assert.deepEqual(config.mentorDates, {});
+  assert.deepEqual(config.cities.map(city => city.name), ["Питер", "Москва"]);
+  ["programs", "mentors", "dates", "notices", "mentorDates", "price", "payDetails"].forEach(key => assert.equal(key in config, false));
+
+  const moscow = findOption(config.cities, "москва");
+  assert.equal(cityStopMessage(moscow), "Позже");
+  assert.equal(findOption(moscow.programs, "Привычка Быть счастливой").notice, "Скоро…");
+  // Общая стоимость переезжает в каждое направление: платными они были и раньше.
+  const { paid, price, payDetails } = findOption(moscow.programs, "Аромаклуб");
+  assert.deepEqual({ paid, price, payDetails }, { paid: true, price: "2 000 ₽", payDetails: "СБП" });
+  assert.deepEqual(findOption(moscow.mentors, "Наталья").dates, ["Вторник", "Четверг"]);
+  assert.deepEqual(findOption(moscow.mentors, "Ольга").dates, ["Среда"]);
+
+  // Копии независимы: правка Москвы не задевает Питер.
+  findOption(moscow.mentors, "Наталья").dates.push("Суббота");
+  assert.deepEqual(findOption(findOption(config.cities, "Питер").mentors, "Наталья").dates, ["Вторник", "Четверг"]);
+});
+
+test("settings saved before notices existed keep Moscow and the upcoming program closed", () => {
+  const config = normalizeConfig({
+    eventName: "Аромаклуб",
+    cities: ["Питер", "Москва"],
+    programs: ["Привычка Быть счастливой"],
+    mentors: ["Анна"],
+    dates: ["Понедельник"]
+  });
+  const piter = findOption(config.cities, "Питер");
+  assert.equal(cityStopMessage(findOption(config.cities, "Москва")), "Запись на мероприятия в Москве откроется позже");
+  assert.equal(cityStopMessage(piter), null);
+  assert.equal(findOption(piter.programs, "Привычка Быть счастливой").notice, "Скоро…");
+});
+
+test("every city keeps its own programs, mentors and dates", () => {
+  const config = normalizeConfig({
+    eventName: "Аромаклуб",
+    cities: [
+      { name: "Питер", programs: [{ name: "Аромаклуб" }], mentors: [{ name: "Серебро", dates: ["Понедельник"] }] },
+      {
+        name: "Москва",
+        programs: [{ name: "Привычка" }, { name: " привычка " }],
+        mentors: [{ name: "Наталья", dates: ["Вторник, 19:00", " Вторник, 19:00 ", ""] }]
+      },
+      { name: "" }
+    ]
+  });
+  assert.deepEqual(config.cities.map(city => city.name), ["Питер", "Москва"]);
+  const moscow = findOption(config.cities, "Москва");
+  assert.deepEqual(moscow.programs.map(program => program.name), ["Привычка"]);
+  assert.deepEqual(findOption(moscow.mentors, "наталья").dates, ["Вторник, 19:00"]);
+  assert.equal(findOption(moscow.mentors, "Серебро"), null);
+});
+
+test("programs saved with a shared price stay paid on the same terms", () => {
+  // Так лежат настройки, сохранённые после разделения по городам, но до оплаты по направлениям.
+  const saved = {
+    eventName: "Аромаклуб",
+    price: "1 500 ₽",
+    payDetails: "СБП",
+    cities: [{
+      name: "Питер",
+      programs: [{ name: "Аромаклуб" }, { name: "Открытая встреча", paid: false, price: "100 ₽", payDetails: "СБП" }],
+      mentors: [{ name: "Анна", dates: ["Пн"] }]
+    }]
+  };
+  const config = normalizeConfig(saved);
+  assert.equal("price" in config, false);
+  assert.equal("payDetails" in config, false);
+  assert.deepEqual(config.cities[0].programs, [
+    { name: "Аромаклуб", notice: "", paid: true, price: "1 500 ₽", payDetails: "СБП" },
+    { name: "Открытая встреча", notice: "", paid: false, price: "", payDetails: "" }
+  ]);
+
+  // Панель, открытая до обновления, присылает то же самое — сохранение не делает направления бесплатными.
+  assert.deepEqual(sanitizeConfigInput(saved).cities[0].programs, config.cities[0].programs);
+});
+
+test("a city without programs or mentors does not open registration", () => {
+  const city = { name: "Казань", notice: "", programs: [], mentors: [{ name: "Анна", notice: "", dates: ["Пн"] }] };
+  assert.equal(cityStopMessage(city), "Запись в этом городе пока не открыта.");
+  assert.equal(cityStopMessage({ ...city, notice: "Скоро…" }), "Скоро…");
+  assert.equal(cityStopMessage({ ...city, programs: [{ name: "Аромаклуб", notice: "" }] }), null);
 });
 
 test("doctor diagnostics program is detected regardless of spaces and case", () => {
@@ -198,48 +253,66 @@ test("WEBHOOK_URL с путём от хостинга не задваивает 
   );
 });
 
-test("admin config is trimmed, deduplicated and validated", () => {
+test("admin config is trimmed and validated city by city", () => {
   const config = sanitizeConfigInput({
     eventName: " Новое событие ",
-    price: " 0 ₽ ",
-    payDetails: "",
-    cities: [" Москва ", "Москва"],
-    programs: ["Аромаклуб"],
-    dates: ["Сегодня"],
-    mentors: ["Анна"]
+    cities: [{
+      name: " Москва ",
+      notice: "  ",
+      programs: [
+        { name: " Аромаклуб ", notice: " Скоро… ", paid: true, price: " 1 500 ₽ ", payDetails: " СБП " },
+        { name: "Открытая встреча", notice: "", paid: false, price: "100 ₽", payDetails: "СБП" }
+      ],
+      mentors: [{ name: "Анна", dates: [" Вторник, 19:00 ", "Вторник, 19:00", ""] }]
+    }]
   });
   assert.equal(config.eventName, "Новое событие");
-  assert.deepEqual(config.cities, ["Москва"]);
-  assert.throws(() => sanitizeConfigInput({ ...config, dates: [] }));
+  assert.deepEqual(config.cities, [{
+    name: "Москва",
+    notice: "",
+    programs: [
+      { name: "Аромаклуб", notice: "Скоро…", paid: true, price: "1 500 ₽", payDetails: "СБП" },
+      { name: "Открытая встреча", notice: "", paid: false, price: "", payDetails: "" }
+    ],
+    mentors: [{ name: "Анна", notice: "", dates: ["Вторник, 19:00"] }]
+  }]);
+
+  // Строки с вложенными списками не выбрасываем молча — сохранение падает с понятной причиной.
+  const [moscow] = config.cities;
+  assert.throws(() => sanitizeConfigInput({ ...config, cities: [] }), /хотя бы один город/);
+  assert.throws(() => sanitizeConfigInput({ ...config, cities: [moscow, { ...moscow, name: "москва" }] }), /указан дважды/);
+  assert.throws(() => sanitizeConfigInput({ ...config, cities: [{ ...moscow, mentors: [{ name: " ", dates: ["Пн"] }] }] }), /без имени/);
+  assert.throws(() => sanitizeConfigInput({ ...config, cities: [{ ...moscow, notice: "я".repeat(401) }] }), /длиннее/);
+
+  // Платное направление без стоимости или реквизитов оставило бы участника без инструкции.
+  const [aroma] = moscow.programs;
+  const withProgram = program => ({ ...config, cities: [{ ...moscow, programs: [program] }] });
+  assert.throws(() => sanitizeConfigInput(withProgram({ ...aroma, price: " " })), /укажите стоимость/);
+  assert.throws(() => sanitizeConfigInput(withProgram({ ...aroma, payDetails: "" })), /как оплатить/);
 });
 
-test("admin config keeps notices and mentor dates only for existing options", () => {
-  const config = sanitizeConfigInput({
-    eventName: "Событие",
-    price: "",
-    payDetails: "",
-    cities: ["Москва", "Питер"],
-    programs: ["Аромаклуб"],
-    dates: ["Понедельник"],
-    mentors: ["Анна", "Пётр"],
-    notices: {
-      cities: { " Москва ": "  Скоро…  ", "Казань": "Нет такого города" },
-      programs: { "Аромаклуб": "   " },
-      mentors: {}
-    },
-    mentorDates: {
-      "Анна": [" Вторник ", "Вторник", ""],
-      "Пётр": [],
-      "Мария": ["Среда"]
-    }
+test("free and paid registrations are announced with the right terms", () => {
+  const reg = { name: "Анна", city: "Питер", program: "Аромаклуб", mentor: "Серебро", date: "Пн" };
+  const free = groupNoteText({ ...reg, free: true }, "");
+  assert.match(free, /Участие: бесплатное направление/);
+  assert.doesNotMatch(free, /Оплата/);
+  assert.match(groupNoteText(reg, "2 000 ₽"), /Участие: оплата 2 000 ₽\n⏳ Оплата ожидается/);
+
+  const cfg = normalizeConfig({
+    eventName: "Аромаклуб",
+    cities: [{ name: "Питер", programs: [{ name: "Аромаклуб", paid: true, price: "2 000 ₽", payDetails: "СБП" }], mentors: [] }]
   });
-  assert.deepEqual(config.notices.cities, { "Москва": "Скоро…" });
-  assert.deepEqual(config.notices.programs, {});
-  assert.deepEqual(config.mentorDates, { "Анна": ["Вторник"] });
-  assert.throws(() => sanitizeConfigInput({
-    ...config,
-    notices: { ...config.notices, cities: { "Москва": "я".repeat(401) } }
-  }));
+  // Заявка помнит стоимость на момент записи, а заявки до оплаты по направлениям берут её из направления.
+  assert.equal(registrationPrice({ ...reg, price: "1 500 ₽" }, cfg), "1 500 ₽");
+  assert.equal(registrationPrice(reg, cfg), "2 000 ₽");
+});
+
+test("default settings pass the same validation as the admin panel", () => {
+  const config = sanitizeConfigInput(JSON.parse(fs.readFileSync("config.json", "utf8")));
+  assert.equal(cityStopMessage(findOption(config.cities, "Москва")), "Запись на мероприятия в Москве откроется позже");
+  assert.equal(cityStopMessage(findOption(config.cities, "Питер")), null);
+  const aroma = findOption(findOption(config.cities, "Питер").programs, "Занятия аромаклуба");
+  assert.deepEqual([aroma.paid, aroma.price], [true, "1 500 ₽"]);
 });
 
 test("admin page contains valid inline JavaScript", () => {

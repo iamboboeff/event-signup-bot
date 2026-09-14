@@ -22,7 +22,7 @@
       --success: #24805e;
       --success-soft: color-mix(in srgb, var(--success) 12%, var(--surface));
       --warning: #bb7819;
-      --shadow: 0 18px 50px rgba(36, 27, 52, .08);
+      --warning-soft: color-mix(in srgb, var(--warning) 14%, var(--surface));
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
@@ -80,29 +80,11 @@
       margin: 0 auto;
       padding: 14px 14px calc(126px + env(safe-area-inset-bottom));
     }
+    .page { animation: page-in .2s ease-out; }
+    @keyframes page-in { from { transform: translateY(8px); } to { transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .page { animation: none; } }
 
-    .hero {
-      position: relative;
-      overflow: hidden;
-      margin-bottom: 14px;
-      padding: 18px;
-      border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
-      border-radius: 24px;
-      background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 10%, var(--surface)), var(--surface) 55%);
-      box-shadow: var(--shadow);
-    }
-    .hero::after {
-      content: "";
-      position: absolute;
-      width: 160px;
-      height: 160px;
-      right: -74px;
-      bottom: -92px;
-      border-radius: 50%;
-      background: color-mix(in srgb, var(--accent) 13%, transparent);
-      pointer-events: none;
-    }
-    .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .home-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
     .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 800; letter-spacing: .02em; }
     .brand-mark {
       display: grid;
@@ -132,21 +114,30 @@
     .identity::before { content: ""; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .eyebrow { margin: 22px 0 6px; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
     h1 { margin: 0; max-width: 580px; font-size: clamp(28px, 7.5vw, 42px); line-height: 1.03; letter-spacing: -.045em; }
-    .intro { max-width: 610px; margin: 11px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
-    .hero-note {
+
+    .page-header { margin: 2px 4px 16px; }
+    .back-link {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      margin-top: 15px;
-      padding: 8px 10px;
-      border: 1px solid var(--line);
-      border-radius: 11px;
-      background: color-mix(in srgb, var(--surface) 80%, transparent);
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.3;
+      gap: 3px;
+      max-width: 100%;
+      margin: 0 0 2px -8px;
+      padding: 6px 10px 6px 6px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 750;
+      cursor: pointer;
     }
-    .hero-note strong { color: var(--text); }
+    .back-link:active { background: var(--accent-soft); }
+    .back-arrow { font-size: 26px; font-weight: 400; line-height: 16px; }
+    .back-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .page-header .eyebrow { margin: 10px 0 5px; }
+    .page-title { font-size: clamp(26px, 7vw, 36px); line-height: 1.08; letter-spacing: -.04em; overflow-wrap: anywhere; }
+    .page-meta { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+    .is-empty { color: var(--muted); }
 
     .panel {
       margin-bottom: 14px;
@@ -156,8 +147,14 @@
       background: var(--surface);
       box-shadow: 0 8px 26px rgba(36, 27, 52, .045);
     }
+    .panel.soft {
+      border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+      background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 9%, var(--surface)), var(--surface) 70%);
+    }
     .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
-    .panel-title { display: flex; align-items: flex-start; gap: 11px; }
+    .panel-heading:last-child { margin-bottom: 0; }
+    .panel-title { display: flex; align-items: flex-start; gap: 11px; min-width: 0; }
+    .panel-heading.compact, .panel-heading.compact .panel-title { align-items: center; }
     .panel-icon {
       display: grid;
       flex: 0 0 auto;
@@ -169,49 +166,12 @@
       font-size: 18px;
     }
     h2 { margin: 0; font-size: 17px; line-height: 1.2; letter-spacing: -.015em; }
+    .h2-count { margin-left: 7px; color: var(--muted); font-weight: 650; }
     .panel-description { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
-    .count {
-      flex: 0 0 auto;
-      padding: 6px 9px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 10px;
-      font-weight: 800;
-      white-space: nowrap;
-    }
-
-    .flow { overflow: hidden; }
-    .flow-track {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(92px, 1fr));
-      gap: 7px;
-      overflow-x: auto;
-      padding: 2px 1px 5px;
-      scrollbar-width: none;
-    }
-    .flow-track::-webkit-scrollbar { display: none; }
-    .flow-step {
-      position: relative;
-      min-width: 92px;
-      padding: 11px 10px 10px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: var(--surface-soft);
-    }
-    .flow-number { color: var(--accent); font-size: 10px; font-weight: 850; }
-    .flow-label { display: block; margin-top: 13px; font-size: 12px; font-weight: 780; }
-    .flow-value { display: block; margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
-
-    .section-heading { margin: 24px 4px 12px; }
-    .section-heading h2 { font-size: 20px; }
-    .section-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-    .grid { display: grid; gap: 12px; }
-    .wide { grid-column: 1 / -1; }
 
     .fields { display: grid; gap: 13px; }
-    .field label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; font-size: 12px; font-weight: 760; }
-    .field-hint { color: var(--muted); font-size: 10px; font-weight: 500; }
+    .field label, .field-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; font-size: 12px; font-weight: 760; }
+    .field-note { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
     input, textarea {
       width: 100%;
       border: 1px solid var(--line);
@@ -228,6 +188,91 @@
       border-color: var(--accent);
       background: var(--surface);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 13%, transparent);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-soft);
+    }
+    .segment {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 760;
+      cursor: pointer;
+    }
+    .segment.active { background: var(--surface); color: var(--success); box-shadow: 0 2px 10px rgba(36, 27, 52, .09); }
+    .segment.active.closed { color: var(--warning); }
+    .segmented + textarea { min-height: 78px; margin-top: 9px; }
+
+    .rows { display: grid; gap: 8px; }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 12px 10px 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--surface-soft);
+      color: var(--text);
+      text-align: left;
+    }
+    button.row { cursor: pointer; transition: border-color .16s ease, background .16s ease; }
+    button.row:active { background: var(--accent-soft); }
+    @media (hover: hover) { button.row:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); } }
+    .row-main { display: grid; gap: 3px; min-width: 0; }
+    .row-name { overflow: hidden; font-size: 15px; font-weight: 760; white-space: nowrap; text-overflow: ellipsis; }
+    .row-meta { overflow: hidden; color: var(--muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+    .row-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
+    .chevron { padding-right: 2px; color: var(--muted); font-size: 26px; font-weight: 300; line-height: 1; }
+    .row-tools { display: flex; gap: 4px; }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 780;
+    }
+    .tag.warn { background: var(--warning-soft); color: var(--warning); }
+    .tag.danger { background: var(--danger-soft); color: var(--danger); }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip-btn {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 12px;
+      background: var(--surface-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .chip-btn.active { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
+
+    .empty {
+      margin: 0;
+      padding: 13px 14px;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
     }
 
     .items { display: grid; gap: 8px; }
@@ -257,12 +302,13 @@
       place-items: center;
       border: 0;
       border-radius: 10px;
-      background: var(--surface-soft);
+      background: var(--surface);
       color: var(--muted);
       cursor: pointer;
       font-size: 15px;
       font-weight: 850;
     }
+    .items .icon-btn { background: var(--surface-soft); }
     .icon-btn:active { transform: scale(.94); }
     .icon-btn:disabled { opacity: .28; cursor: default; transform: none; }
     .icon-btn.danger { background: var(--danger-soft); color: var(--danger); }
@@ -278,92 +324,19 @@
       cursor: pointer;
     }
     .add-btn:active { background: var(--accent-soft); }
-    .add-btn.small { margin-top: 2px; padding: 8px 11px; font-size: 12px; }
 
-    .item-block { display: grid; gap: 8px; border: 1px solid transparent; border-radius: 15px; }
-    .item-block.open {
-      padding: 9px;
-      border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
-      background: var(--surface-soft);
-    }
-    .icon-btn.settings { font-size: 17px; font-weight: 400; }
-    .icon-btn.active { background: var(--accent); color: var(--accent-text); }
-    .item-tags { display: flex; flex-wrap: wrap; gap: 5px; padding-left: 31px; }
-    .tag {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 10px;
+    .danger-zone { margin: 26px 0 14px; }
+    .danger-btn {
+      width: 100%;
+      border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+      border-radius: 14px;
+      padding: 12px;
+      background: var(--danger-soft);
+      color: var(--danger);
       font-weight: 780;
+      cursor: pointer;
     }
-    .tag.muted { background: color-mix(in srgb, var(--muted) 13%, transparent); color: var(--muted); }
-    .tag.warn { background: color-mix(in srgb, var(--warning) 14%, var(--surface)); color: var(--warning); }
-
-    .item-details {
-      display: grid;
-      gap: 11px;
-      padding: 13px;
-      border: 1px solid var(--line);
-      border-radius: 13px;
-      background: var(--surface);
-    }
-    .detail-block { display: grid; gap: 8px; }
-    .detail-block + .detail-block { padding-top: 12px; border-top: 1px solid var(--line); }
-    .detail-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 760; }
-    .item-details textarea { min-height: 74px; }
-    .detail-note { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
-    .switch { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; }
-    .switch input { width: auto; margin: 0; accent-color: var(--accent); }
-    .sub-items { display: grid; gap: 6px; }
-    .sub-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
-    .sub-item input { padding: 9px 11px; }
-    .sub-item .icon-btn { width: 30px; height: 30px; font-size: 14px; }
-
-    .access {
-      display: grid;
-      gap: 12px;
-    }
-    .command-list { display: grid; gap: 8px; }
-    .command-row {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 10px;
-      align-items: center;
-      padding: 10px 11px;
-      border-radius: 12px;
-      background: var(--surface-soft);
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.35;
-    }
-    code { padding: 5px 7px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; font-weight: 750; }
-    .access-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
-
-    .loading {
-      display: grid;
-      min-height: 180px;
-      place-items: center;
-      padding: 30px;
-      border: 1px solid var(--line);
-      border-radius: 21px;
-      background: var(--surface);
-      color: var(--muted);
-      text-align: center;
-    }
-    .spinner {
-      width: 28px;
-      height: 28px;
-      margin: 0 auto 12px;
-      border: 3px solid var(--accent-soft);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .danger-note { margin: 8px 4px 0; color: var(--muted); font-size: 11px; line-height: 1.45; text-align: center; }
 
     .savebar {
       position: fixed;
@@ -384,6 +357,7 @@
     .state-copy { min-width: 0; }
     .state-title { display: block; font-size: 12px; font-weight: 800; }
     .status { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .savebar[data-state="error"] .status { white-space: normal; }
     .save {
       flex: 0 0 auto;
       min-width: 154px;
@@ -401,16 +375,14 @@
 
     @media (min-width: 670px) {
       .shell { padding-top: 24px; }
-      .hero, .panel { padding: 22px; }
-      .grid { grid-template-columns: 1fr 1fr; }
+      .panel { padding: 22px; }
       .fields { grid-template-columns: 1fr 1fr; }
       .field.full { grid-column: 1 / -1; }
-      .access { grid-template-columns: 1fr 1fr; align-items: start; }
     }
 
     @media (max-width: 420px) {
       .shell { padding-left: 10px; padding-right: 10px; }
-      .hero, .panel { padding: 15px; border-radius: 19px; }
+      .panel { padding: 15px; border-radius: 19px; }
       .identity { max-width: 54%; }
       .item { grid-template-columns: 22px minmax(0, 1fr); }
       .item-actions { grid-column: 2; justify-content: flex-end; margin-top: -2px; }
@@ -427,116 +399,7 @@
     </div>
   </div>
 
-  <main id="adminShell" class="shell hidden">
-    <header class="hero">
-      <div class="hero-top">
-        <div class="brand"><span class="brand-mark">✦</span><span>Админ-панель</span></div>
-        <div id="identity" class="identity">Проверяем доступ…</div>
-      </div>
-      <p class="eyebrow">Управление записью</p>
-      <h1>Всё, что увидит участник в боте</h1>
-      <p class="intro">Настройте название, варианты выбора и оплату. После сохранения новые данные сразу появятся в следующих анкетах.</p>
-      <div class="hero-note"><span>ⓘ</span><span><strong>Уже созданные заявки не изменятся.</strong> Обновления действуют только для новых записей.</span></div>
-    </header>
-
-    <div id="loading" class="loading">
-      <div><div class="spinner"></div><span>Загружаем настройки…</span></div>
-    </div>
-
-    <div id="form" class="hidden">
-      <section class="panel flow" aria-labelledby="flow-title">
-        <div class="panel-heading">
-          <div class="panel-title">
-            <div class="panel-icon">🧭</div>
-            <div><h2 id="flow-title">Путь участника</h2><p class="panel-description">Так выглядит порядок вопросов в боте.</p></div>
-          </div>
-        </div>
-        <div class="flow-track">
-          <div class="flow-step"><span class="flow-number">01</span><span class="flow-label">Город</span><span class="flow-value" data-flow-value="cities">—</span></div>
-          <div class="flow-step"><span class="flow-number">02</span><span class="flow-label">Направление</span><span class="flow-value" data-flow-value="programs">—</span></div>
-          <div class="flow-step"><span class="flow-number">03</span><span class="flow-label">Имя</span><span class="flow-value">ввод текстом</span></div>
-          <div class="flow-step"><span class="flow-number">04</span><span class="flow-label">Наставник</span><span class="flow-value" data-flow-value="mentors">—</span></div>
-          <div class="flow-step"><span class="flow-number">05</span><span class="flow-label">Дата</span><span class="flow-value" data-flow-value="dates">—</span></div>
-          <div class="flow-step"><span class="flow-number">06</span><span class="flow-label">Участие</span><span class="flow-value">абонемент / оплата</span></div>
-        </div>
-      </section>
-
-      <div class="section-heading"><h2>Основные данные</h2><p>Название и информация об оплате показываются участнику в сообщениях бота.</p></div>
-      <section class="panel" aria-labelledby="main-title">
-        <div class="panel-heading">
-          <div class="panel-title">
-            <div class="panel-icon">✏️</div>
-            <div><h2 id="main-title">О мероприятии</h2><p class="panel-description">Общая информация для всех направлений.</p></div>
-          </div>
-        </div>
-        <div class="fields">
-          <div class="field full">
-            <label for="eventName"><span>Название мероприятия</span><span class="field-hint">до 120 символов</span></label>
-            <input id="eventName" maxlength="120" autocomplete="off" placeholder="Например, Клуб счастливых привычек">
-          </div>
-          <div class="field">
-            <label for="price"><span>Стоимость участия</span><span class="field-hint">как увидит участник</span></label>
-            <input id="price" maxlength="80" autocomplete="off" placeholder="Например, 1 500 ₽">
-          </div>
-          <div class="field full">
-            <label for="payDetails"><span>Как оплатить</span><span class="field-hint">реквизиты и пояснение</span></label>
-            <textarea id="payDetails" maxlength="1200" placeholder="Напишите реквизиты и короткую инструкцию по оплате"></textarea>
-          </div>
-        </div>
-      </section>
-
-      <div class="section-heading"><h2>Варианты ответов</h2><p>Текст меняется прямо в строке, стрелки задают порядок кнопок. Кнопка ⚙ открывает системное сообщение варианта, а у наставника — ещё и его собственные даты.</p></div>
-      <div class="grid">
-        <section class="panel" data-list-card="cities" data-placeholder="Название города" data-notice="1">
-          <div class="panel-heading">
-            <div class="panel-title"><div class="panel-icon">📍</div><div><h2>Города</h2><p class="panel-description">Первый выбор участника.</p></div></div>
-            <span class="count" data-count-for="cities">—</span>
-          </div>
-          <div class="items"></div>
-          <button class="add-btn" type="button">＋ Добавить город</button>
-        </section>
-
-        <section class="panel" data-list-card="programs" data-placeholder="Название направления" data-notice="1">
-          <div class="panel-heading">
-            <div class="panel-title"><div class="panel-icon">🌿</div><div><h2>Направления</h2><p class="panel-description">Занятия и мероприятия.</p></div></div>
-            <span class="count" data-count-for="programs">—</span>
-          </div>
-          <div class="items"></div>
-          <button class="add-btn" type="button">＋ Добавить направление</button>
-        </section>
-
-        <section class="panel wide" data-list-card="mentors" data-placeholder="Имя наставника" data-notice="1" data-mentor-dates="1">
-          <div class="panel-heading">
-            <div class="panel-title"><div class="panel-icon">🤝</div><div><h2>Наставники</h2><p class="panel-description">К кому записывается участник и в какие дни он принимает.</p></div></div>
-            <span class="count" data-count-for="mentors">—</span>
-          </div>
-          <div class="items"></div>
-          <button class="add-btn" type="button">＋ Добавить наставника</button>
-        </section>
-
-        <section class="panel wide" data-list-card="dates" data-placeholder="Дата или день недели">
-          <div class="panel-heading">
-            <div class="panel-title"><div class="panel-icon">🗓️</div><div><h2>Общие даты</h2><p class="panel-description">Их видят наставники без своего расписания.</p></div></div>
-            <span class="count" data-count-for="dates">—</span>
-          </div>
-          <div class="items"></div>
-          <button class="add-btn" type="button">＋ Добавить дату</button>
-        </section>
-      </div>
-
-      <div class="section-heading"><h2>Доступ к управлению</h2><p>Эти команды работают только у действующих администраторов в личном чате с ботом.</p></div>
-      <section class="panel access" aria-labelledby="access-title">
-        <div>
-          <div class="panel-title"><div class="panel-icon">🔐</div><div><h2 id="access-title">Администраторы</h2><p class="panel-description">Добавляйте по ID или username.</p></div></div>
-          <p class="access-note" style="margin-top:14px">Telegram ID надёжнее username: имя пользователя можно изменить. Для обычной записи выключите режим командой <code>/adminoff</code>.</p>
-        </div>
-        <div class="command-list">
-          <div class="command-row"><code>/addadmin</code><span>добавить администратора</span></div>
-          <div class="command-row"><code>/kickadmin</code><span>удалить администратора</span></div>
-        </div>
-      </section>
-    </div>
-  </main>
+  <main id="adminShell" class="shell hidden"></main>
 
   <div id="savebar" class="savebar hidden" data-state="clean">
     <div class="savebar-inner">
@@ -554,32 +417,59 @@
       const tg = window.Telegram && window.Telegram.WebApp;
       if (tg) { tg.ready(); tg.expand(); }
 
+      // Вне Telegram и в старых клиентах методы WebApp есть, но бросают ошибку.
+      const supports = version => !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast(version));
       const initData = tg ? tg.initData : "";
       const user = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
-      const listKeys = ["cities", "programs", "mentors", "dates"];
-      const noticeKeys = ["cities", "programs", "mentors"];
-      const textKeys = ["eventName", "price", "payDetails"];
+      const NAME_MAX = 120;
       const NOTICE_MAX = 400;
-      const VALUE_MAX = 120;
+      const PRICE_MAX = 80;
+      const PAY_DETAILS_MAX = 1200;
+      const DEFAULT_NOTICE = "Скоро…";
+      const DOCTOR_PROGRAM = "диагностика с доктором";
       const brandGate = document.getElementById("brandGate");
-      const adminShell = document.getElementById("adminShell");
-      const identity = document.getElementById("identity");
-      const loading = document.getElementById("loading");
-      const form = document.getElementById("form");
+      const shell = document.getElementById("adminShell");
       const savebar = document.getElementById("savebar");
       const saveButton = document.getElementById("save");
       const stateTitle = document.getElementById("stateTitle");
       const status = document.getElementById("status");
-      // Раскрытые настройки помним по служебному uid: он переживает и сортировку,
-      // и переименование варианта, в отличие от текста или индекса.
-      const opened = new Set();
-      let uid = 0;
-      let draft = null;
-      let dirty = false;
-
-      identity.textContent = user
+      const identity = user
         ? `${user.first_name || "Администратор"}${user.username ? " · @" + user.username : ""}`
         : "Доступ через Telegram";
+
+      let draft = null;
+      let savedSnapshot = "";
+      let dirty = false;
+      let uidCounter = 0;
+      // Навигация как в настройках телефона: текущая страница и стек предыдущих
+      // вместе с прокруткой, чтобы «Назад» возвращал ровно туда, откуда пришли.
+      let route = { page: "home" };
+      const backStack = [];
+      // Списки, в которых сейчас включён режим «Порядок».
+      const sorting = new Set();
+
+      // Пропускает null и false, чтобы условные блоки можно было писать прямо в списке:
+      // нативный append превратил бы их в текст «null».
+      function appendChildren(el, children) {
+        children.flat(Infinity).forEach(child => {
+          if (child == null || child === false) return;
+          el.append(child instanceof Node ? child : String(child));
+        });
+        return el;
+      }
+
+      function h(tag, props, ...children) {
+        const el = document.createElement(tag);
+        Object.entries(props || {}).forEach(([key, value]) => {
+          if (value == null || value === false) return;
+          if (key === "class") el.className = value;
+          else if (key === "text") el.textContent = value;
+          else if (key.startsWith("on") && typeof value === "function") el.addEventListener(key.slice(2), value);
+          else if (key.includes("-") || !(key in el)) el.setAttribute(key, value === true ? "" : String(value));
+          else el[key] = value;
+        });
+        return appendChildren(el, children);
+      }
 
       function api(path, options = {}) {
         return fetch(path, {
@@ -604,14 +494,22 @@
         return last >= 2 && last <= 4 ? few : many;
       }
 
-      function variantsText(count) {
-        return `${count} ${plural(count, "вариант", "варианта", "вариантов")}`;
+      function countText(count, one, few, many) {
+        return `${count} ${plural(count, one, few, many)}`;
+      }
+
+      function normalizeName(value) {
+        return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ru");
+      }
+
+      function haptic(type) {
+        if (supports("6.1")) tg.HapticFeedback.notificationOccurred(type);
       }
 
       function syncCloseWarning() {
-        if (!tg) return;
-        if (dirty && tg.enableClosingConfirmation) tg.enableClosingConfirmation();
-        if (!dirty && tg.disableClosingConfirmation) tg.disableClosingConfirmation();
+        if (!supports("6.2")) return;
+        if (dirty) tg.enableClosingConfirmation();
+        else tg.disableClosingConfirmation();
       }
 
       function setState(title, message, kind) {
@@ -621,6 +519,8 @@
       }
 
       function markDirty(message = "Нажмите «Сохранить»") {
+        // Вернули всё как было — сохранять нечего.
+        if (JSON.stringify(toPayload()) === savedSnapshot) { markClean(); return; }
         dirty = true;
         saveButton.disabled = false;
         setState("Есть изменения", message, "dirty");
@@ -634,396 +534,752 @@
         syncCloseWarning();
       }
 
+      function confirmAction(message, onConfirm) {
+        if (supports("6.2")) tg.showConfirm(message, confirmed => { if (confirmed) onConfirm(); });
+        else if (window.confirm(message)) onConfirm();
+      }
+
       // ---------- модель ----------
-      // В настройках варианты — просто строки, а системные сообщения и даты
-      // наставников лежат отдельными словарями. В панели удобнее обратное:
-      // всё, что относится к варианту, держим в одном объекте строки.
+      // Сервер хранит сообщение закрытого варианта в notice. В панели держим
+      // отдельный флаг closed: текст не пропадает, если закрыть и снова открыть.
+      function nextUid() {
+        uidCounter += 1;
+        return "u" + uidCounter;
+      }
+
+      function toOption(option, extra) {
+        const notice = option.notice || "";
+        return { uid: nextUid(), name: option.name || "", closed: !!notice.trim(), notice, ...extra };
+      }
+
       function toDraft(config) {
-        const next = {};
-        textKeys.forEach(key => { next[key] = config[key] || ""; });
-        const mentorDates = config.mentorDates || {};
-        listKeys.forEach(key => {
-          const notices = (config.notices && config.notices[key]) || {};
-          next[key] = (config[key] || []).map(value => {
-            const item = { uid: "v" + (++uid), value, notice: notices[value] || "" };
-            if (key === "mentors") {
-              const own = mentorDates[value];
-              item.dates = Array.isArray(own) && own.length ? [...own] : null;
-            }
-            return item;
-          });
+        return {
+          eventName: config.eventName || "",
+          cities: (config.cities || []).map(city => toOption(city, {
+            programs: (city.programs || []).map(program => toOption(program, {
+              paid: !!program.paid,
+              price: program.price || "",
+              payDetails: program.payDetails || ""
+            })),
+            mentors: (city.mentors || []).map(mentor => toOption(mentor, { dates: [...(mentor.dates || [])] }))
+          }))
+        };
+      }
+
+      // isNew: элемент добавлен в этой сессии и ещё ни разу не сохранялся.
+      function newOption(extra) {
+        return { uid: nextUid(), name: "", closed: false, notice: "", isNew: true, ...extra };
+      }
+
+      function filledDates(mentor) {
+        return mentor.dates.map(date => date.trim()).filter(Boolean);
+      }
+
+      function fromOption(option) {
+        return { name: option.name, notice: option.closed ? (option.notice.trim() || DEFAULT_NOTICE) : "" };
+      }
+
+      // Как и сообщение закрытого варианта, стоимость и реквизиты не теряются в
+      // черновике, если сделать направление бесплатным, но на сервер не уходят.
+      function fromProgram(program) {
+        const payment = program.paid
+          ? { paid: true, price: program.price.trim(), payDetails: program.payDetails.trim() }
+          : { paid: false, price: "", payDetails: "" };
+        return { ...fromOption(program), ...payment };
+      }
+
+      function toPayload() {
+        return {
+          eventName: draft.eventName,
+          cities: draft.cities.map(city => ({
+            ...fromOption(city),
+            programs: city.programs.map(fromProgram),
+            mentors: city.mentors.map(mentor => ({ ...fromOption(mentor), dates: filledDates(mentor) }))
+          }))
+        };
+      }
+
+      // После сохранения сервер присылает настройки заново. Возвращаем элементам
+      // прежние uid, чтобы панель осталась на той же странице.
+      function keepUids(next, previous) {
+        const adopt = (items, oldItems, nested) => items.forEach((item, index) => {
+          const old = oldItems[index];
+          if (!old || normalizeName(old.name) !== normalizeName(item.name)) return;
+          item.uid = old.uid;
+          if (nested) nested(item, old);
+        });
+        adopt(next.cities, previous.cities, (city, old) => {
+          adopt(city.programs, old.programs);
+          adopt(city.mentors, old.mentors);
         });
         return next;
       }
 
-      function ownDates(item) {
-        return Array.isArray(item.dates) ? item.dates.map(value => value.trim()).filter(Boolean) : [];
+      function findCity(uid) {
+        return draft.cities.find(city => city.uid === uid) || null;
       }
 
-      function toPayload() {
-        const payload = { notices: {}, mentorDates: {} };
-        textKeys.forEach(key => { payload[key] = draft[key]; });
-        listKeys.forEach(key => { payload[key] = draft[key].map(item => item.value); });
-        noticeKeys.forEach(key => {
-          payload.notices[key] = {};
-          draft[key].forEach(item => {
-            const option = item.value.trim();
-            const message = (item.notice || "").trim();
-            if (option && message) payload.notices[key][option] = message;
-          });
-        });
-        draft.mentors.forEach(item => {
-          const mentor = item.value.trim();
-          const dates = ownDates(item);
-          if (mentor && dates.length) payload.mentorDates[mentor] = dates;
-        });
-        return payload;
+      function findItem(list, uid) {
+        return list.find(item => item.uid === uid) || null;
       }
 
-      // ---------- сводка ----------
-      function closedCount(key) {
-        return draft[key].filter(item => (item.notice || "").trim()).length;
+      function removeFrom(list, item) {
+        const index = list.indexOf(item);
+        if (index >= 0) list.splice(index, 1);
       }
 
-      function updateSummary() {
-        if (!draft) return;
-        listKeys.forEach(key => {
-          const count = document.querySelector(`[data-count-for="${key}"]`);
-          if (count) count.textContent = variantsText(draft[key].length);
-          const flow = document.querySelector(`[data-flow-value="${key}"]`);
-          if (!flow) return;
-          const closed = noticeKeys.includes(key) ? closedCount(key) : 0;
-          flow.textContent = closed
-            ? `${draft[key].length} · закрыто ${closed}`
-            : variantsText(draft[key].length);
-        });
-        const personal = draft.mentors.filter(item => ownDates(item).length).length;
-        const dateFlow = document.querySelector('[data-flow-value="dates"]');
-        if (dateFlow && personal) {
-          dateFlow.textContent = `свои у ${personal} ${plural(personal, "наставника", "наставников", "наставников")}`;
+      function isDoctor(program) {
+        return normalizeName(program.name) === DOCTOR_PROGRAM;
+      }
+
+      function cityMeta(city) {
+        return `${countText(city.programs.length, "направление", "направления", "направлений")} · ` +
+          countText(city.mentors.length, "наставник", "наставника", "наставников");
+      }
+
+      function mentorMeta(mentor) {
+        const dates = filledDates(mentor);
+        if (!dates.length) return "Даты не заданы";
+        const shown = dates.slice(0, 3).join(" · ");
+        return dates.length > 3 ? `${shown} · ещё ${dates.length - 3}` : shown;
+      }
+
+      function tag(text, kind) {
+        return h("span", { class: kind ? `tag ${kind}` : "tag", text });
+      }
+
+      function cityTags(city) {
+        if (city.closed) return [tag("⏸ Запись закрыта", "warn")];
+        if (!city.programs.length || !city.mentors.length) return [tag("⚠ Не заполнен", "danger")];
+        return [];
+      }
+
+      function paymentMissing(program) {
+        return program.paid && (!program.price.trim() || !program.payDetails.trim());
+      }
+
+      function programMeta(program) {
+        const payment = program.paid ? program.price.trim() || "Платно" : "Бесплатно";
+        return isDoctor(program) ? `${payment} · время из таблицы врача` : payment;
+      }
+
+      function programTags(program) {
+        if (program.closed) return [tag("⏸ Запись закрыта", "warn")];
+        if (paymentMissing(program)) return [tag("⚠ Не заполнена оплата", "danger")];
+        return [];
+      }
+
+      function mentorTags(mentor) {
+        if (mentor.closed) return [tag("⏸ Запись закрыта", "warn")];
+        if (!filledDates(mentor).length) return [tag("⚠ Нет дат", "danger")];
+        return [];
+      }
+
+      // ---------- навигация ----------
+      function go(next) {
+        backStack.push({ route, scroll: window.scrollY });
+        route = next;
+        render(0);
+      }
+
+      // Добавили вариант и сразу вернулись, ничего не заполнив, — пустышку не оставляем.
+      function discardBlankNewItem() {
+        const city = route.city ? findCity(route.city) : null;
+        if (!city) return false;
+        const blank = item => !!item && item.isNew && !item.name.trim() && !item.closed;
+        let target = null;
+        let list = null;
+        if (route.page === "city" && blank(city) && !city.programs.length && !city.mentors.length) {
+          [target, list] = [city, draft.cities];
+        } else if (route.page === "program") {
+          const program = findItem(city.programs, route.item);
+          if (blank(program)) [target, list] = [program, city.programs];
+        } else if (route.page === "mentor") {
+          const mentor = findItem(city.mentors, route.item);
+          if (blank(mentor) && !filledDates(mentor).length) [target, list] = [mentor, city.mentors];
+        }
+        if (!target) return false;
+        removeFrom(list, target);
+        return true;
+      }
+
+      function back() {
+        if (discardBlankNewItem()) markDirty("Пустой вариант убран");
+        const previous = backStack.pop();
+        route = previous ? previous.route : { page: "home" };
+        render(previous ? previous.scroll : 0);
+      }
+
+      function syncBackButton() {
+        if (!supports("6.1")) return;
+        if (route.page === "home") tg.BackButton.hide();
+        else tg.BackButton.show();
+      }
+
+      if (supports("6.1")) tg.BackButton.onClick(back);
+
+      function buildPage() {
+        if (route.page === "home") return homePage();
+        const city = findCity(route.city);
+        if (!city) return null;
+        if (route.page === "city") return cityPage(city);
+        if (route.page === "program") {
+          const program = findItem(city.programs, route.item);
+          return program ? programPage(city, program) : null;
+        }
+        if (route.page === "mentor") {
+          const mentor = findItem(city.mentors, route.item);
+          return mentor ? mentorPage(city, mentor) : null;
+        }
+        return null;
+      }
+
+      function render(scroll = window.scrollY) {
+        let view = buildPage();
+        if (!view) {
+          // Страницы удалённого элемента больше нет — возвращаемся на главную.
+          backStack.length = 0;
+          route = { page: "home" };
+          view = buildPage();
+          scroll = 0;
+        }
+        shell.innerHTML = "";
+        shell.appendChild(view);
+        syncBackButton();
+        window.scrollTo(0, scroll);
+        if (route.focus) {
+          const field = document.getElementById(route.focus);
+          delete route.focus;
+          if (field) field.focus();
         }
       }
 
-      function syncTags(tags, key, item) {
-        tags.innerHTML = "";
-        const notice = (item.notice || "").trim();
-        if (notice) {
-          const tag = document.createElement("span");
-          tag.className = "tag warn";
-          tag.textContent = "⏸ Запись закрыта";
-          tags.appendChild(tag);
-        }
-        if (key === "mentors") {
-          const count = ownDates(item).length;
-          const tag = document.createElement("span");
-          tag.className = count ? "tag" : "tag muted";
-          tag.textContent = count
-            ? `🗓 ${count} ${plural(count, "своя дата", "свои даты", "своих дат")}`
-            : "🗓 общие даты";
-          tags.appendChild(tag);
-        }
-        tags.classList.toggle("hidden", !tags.childElementCount);
-        updateSummary();
-      }
-
-      // ---------- отрисовка ----------
-      function iconButton(text, label, action, extra = "", disabled = false) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "icon-btn" + (extra ? " " + extra : "");
-        button.textContent = text;
-        button.title = label;
-        button.disabled = disabled;
-        button.setAttribute("aria-label", label);
-        button.addEventListener("click", action);
-        return button;
-      }
-
-      function noticeEditor(key, item, tags) {
-        const block = document.createElement("div");
-        block.className = "detail-block";
-
-        const label = document.createElement("div");
-        label.className = "detail-label";
-        const title = document.createElement("span");
-        title.textContent = "Системное сообщение";
-        const hint = document.createElement("span");
-        hint.className = "field-hint";
-        hint.textContent = "пусто — запись открыта";
-        label.append(title, hint);
-
-        const textarea = document.createElement("textarea");
-        textarea.maxLength = NOTICE_MAX;
-        textarea.value = item.notice || "";
-        textarea.placeholder = "Например: Скоро…";
-        textarea.setAttribute("aria-label", "Системное сообщение варианта");
-        textarea.addEventListener("input", () => {
-          item.notice = textarea.value;
-          syncTags(tags, key, item);
-          markDirty("Системное сообщение изменено");
-        });
-
-        const note = document.createElement("p");
-        note.className = "detail-note";
-        note.textContent = "Пока текст заполнен, бот показывает его вместо продолжения анкеты и закрывает запись на этом варианте.";
-
-        block.append(label, textarea, note);
-        return block;
-      }
-
-      function mentorDatesEditor(item, tags) {
-        const block = document.createElement("div");
-        block.className = "detail-block";
-
-        const label = document.createElement("div");
-        label.className = "detail-label";
-        const title = document.createElement("span");
-        title.textContent = "Свои даты";
-        const toggle = document.createElement("label");
-        toggle.className = "switch";
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = Array.isArray(item.dates);
-        const toggleText = document.createElement("span");
-        toggleText.textContent = "у этого наставника";
-        toggle.append(checkbox, toggleText);
-        label.append(title, toggle);
-
-        const body = document.createElement("div");
-        body.className = "detail-block";
-        body.style.gap = "8px";
-
-        function renderDates(focusLast = false) {
-          body.innerHTML = "";
-          if (!Array.isArray(item.dates)) {
-            const note = document.createElement("p");
-            note.className = "detail-note";
-            note.textContent = "Сейчас участник видит общий список дат.";
-            body.appendChild(note);
-            return;
-          }
-
-          const list = document.createElement("div");
-          list.className = "sub-items";
-          item.dates.forEach((value, index) => {
-            const row = document.createElement("div");
-            row.className = "sub-item";
-
-            const input = document.createElement("input");
-            input.value = value;
-            input.maxLength = VALUE_MAX;
-            input.placeholder = "Дата или день недели";
-            input.setAttribute("aria-label", `Дата наставника ${index + 1}`);
-            input.addEventListener("input", () => {
-              item.dates[index] = input.value;
-              syncTags(tags, "mentors", item);
-              markDirty("Дата наставника изменена");
-            });
-
-            const actions = document.createElement("div");
-            actions.className = "item-actions";
-            actions.append(
-              iconButton("↑", "Поднять дату выше", () => moveDate(index, -1), "", index === 0),
-              iconButton("↓", "Опустить дату ниже", () => moveDate(index, 1), "", index === item.dates.length - 1),
-              iconButton("×", "Удалить дату", () => removeDate(index), "danger")
-            );
-
-            row.append(input, actions);
-            list.appendChild(row);
-          });
-
-          const add = document.createElement("button");
-          add.type = "button";
-          add.className = "add-btn small";
-          add.textContent = "＋ Добавить дату";
-          add.addEventListener("click", () => {
-            item.dates.push("");
-            renderDates(true);
-            syncTags(tags, "mentors", item);
-            markDirty("Заполните новую дату наставника");
-          });
-
-          body.append(list, add);
-          if (focusLast) {
-            const inputs = list.querySelectorAll("input");
-            if (inputs.length) inputs[inputs.length - 1].focus();
-          }
-        }
-
-        function moveDate(index, delta) {
-          const next = index + delta;
-          if (next < 0 || next >= item.dates.length) return;
-          [item.dates[index], item.dates[next]] = [item.dates[next], item.dates[index]];
-          renderDates();
-          markDirty("Порядок дат наставника изменён");
-        }
-
-        // Убрали последнюю свою дату — наставник возвращается к общему списку,
-        // иначе в боте у него не осталось бы ни одной кнопки.
-        function removeDate(index) {
-          item.dates.splice(index, 1);
-          if (!item.dates.length) {
-            item.dates = null;
-            checkbox.checked = false;
-          }
-          renderDates();
-          syncTags(tags, "mentors", item);
-          markDirty(item.dates ? "Дата наставника удалена" : "Наставник вернулся к общим датам");
-        }
-
-        checkbox.addEventListener("change", () => {
-          if (checkbox.checked) {
-            const base = draft.dates.map(date => date.value.trim()).filter(Boolean);
-            item.dates = base.length ? base : [""];
-          } else {
-            item.dates = null;
-          }
-          renderDates(checkbox.checked);
-          syncTags(tags, "mentors", item);
-          markDirty(checkbox.checked ? "Проверьте даты наставника" : "Наставник вернулся к общим датам");
-        });
-
-        renderDates();
-        block.append(label, body);
-        return block;
-      }
-
-      function buildItem(card, key, item, index) {
-        const block = document.createElement("div");
-        block.className = "item-block";
-        const hasDetails = card.dataset.notice === "1" || card.dataset.mentorDates === "1";
-        const isOpen = hasDetails && opened.has(item.uid);
-        if (isOpen) block.classList.add("open");
-
-        const row = document.createElement("div");
-        row.className = "item";
-
-        const number = document.createElement("span");
-        number.className = "item-index";
-        number.textContent = index + 1;
-
-        const input = document.createElement("input");
-        input.value = item.value;
-        input.maxLength = VALUE_MAX;
-        input.placeholder = card.dataset.placeholder || "Введите значение";
-        input.setAttribute("aria-label", `${card.querySelector("h2").textContent}: вариант ${index + 1}`);
-        input.addEventListener("input", () => {
-          item.value = input.value;
-          markDirty("Текст варианта изменён");
-        });
-
-        const tags = document.createElement("div");
-        tags.className = "item-tags";
-
-        const actions = document.createElement("div");
-        actions.className = "item-actions";
-        if (hasDetails) {
-          const settings = iconButton("⚙", "Настройки варианта", () => {
-            if (opened.has(item.uid)) opened.delete(item.uid);
-            else opened.add(item.uid);
-            renderList(key);
-          }, "settings" + (isOpen ? " active" : ""));
-          settings.setAttribute("aria-expanded", String(isOpen));
-          actions.appendChild(settings);
-        }
-        actions.append(
-          iconButton("↑", "Поднять выше", () => move(key, index, -1), "", index === 0),
-          iconButton("↓", "Опустить ниже", () => move(key, index, 1), "", index === draft[key].length - 1),
-          iconButton("×", "Удалить", () => remove(key, index), "danger")
+      // ---------- общие блоки ----------
+      function panelHeading(icon, title, description, aside) {
+        return h("div", { class: description ? "panel-heading" : "panel-heading compact" },
+          h("div", { class: "panel-title" },
+            h("div", { class: "panel-icon", "aria-hidden": "true", text: icon }),
+            h("div", null,
+              h("h2", null, title),
+              description ? h("p", { class: "panel-description", text: description }) : null
+            )
+          ),
+          aside
         );
-
-        row.append(number, input, actions);
-        block.append(row, tags);
-
-        if (isOpen) {
-          const details = document.createElement("div");
-          details.className = "item-details";
-          if (card.dataset.notice === "1") details.appendChild(noticeEditor(key, item, tags));
-          if (card.dataset.mentorDates === "1") details.appendChild(mentorDatesEditor(item, tags));
-          block.appendChild(details);
-        }
-
-        syncTags(tags, key, item);
-        return block;
       }
 
-      function renderList(key) {
-        const card = document.querySelector(`[data-list-card="${key}"]`);
-        const container = card.querySelector(".items");
-        container.innerHTML = "";
-        draft[key].forEach((item, index) => container.appendChild(buildItem(card, key, item, index)));
-        updateSummary();
+      function textField({ id, label, value, maxLength, placeholder, multiline, full, onInput }) {
+        return h("div", { class: full ? "field full" : "field" },
+          h("label", { for: id, text: label }),
+          h(multiline ? "textarea" : "input", {
+            id,
+            value,
+            maxLength,
+            placeholder,
+            autocomplete: "off",
+            oninput: event => onInput(event.target.value)
+          })
+        );
       }
 
-      function renderAll() {
-        textKeys.forEach(key => { document.getElementById(key).value = draft[key] || ""; });
-        listKeys.forEach(renderList);
+      function iconButton(text, label, onclick, disabled, extra) {
+        return h("button", {
+          type: "button",
+          class: extra ? `icon-btn ${extra}` : "icon-btn",
+          text,
+          title: label,
+          "aria-label": label,
+          disabled,
+          onclick
+        });
       }
 
-      function move(key, index, delta) {
+      function pageHeader({ backLabel, eyebrow, title, fallback, meta }) {
+        const name = title.trim();
+        return h("header", { class: "page-header" },
+          h("button", { type: "button", class: "back-link", onclick: back },
+            h("span", { class: "back-arrow", "aria-hidden": "true", text: "‹" }),
+            h("span", { class: "back-label", text: backLabel })
+          ),
+          h("p", { class: "eyebrow", text: eyebrow }),
+          h("h1", { class: name ? "page-title" : "page-title is-empty", "data-fallback": fallback, text: name || fallback }),
+          meta ? h("p", { class: "page-meta", text: meta }) : null
+        );
+      }
+
+      function syncPageTitle(value) {
+        const title = shell.querySelector(".page-title");
+        if (!title) return;
+        title.textContent = value.trim() || title.dataset.fallback;
+        title.classList.toggle("is-empty", !value.trim());
+      }
+
+      function segmented(label, options) {
+        return h("div", { class: "segmented", role: "radiogroup", "aria-label": label },
+          options.map(({ text, active, tone, onSelect }) => h("button", {
+            type: "button",
+            class: ["segment", active && "active", active && tone].filter(Boolean).join(" "),
+            role: "radio",
+            "aria-checked": String(active),
+            text,
+            onclick: onSelect
+          }))
+        );
+      }
+
+      // Переключатель «Открыта / Закрыта»: закрытый вариант показывает участнику
+      // сообщение и завершает анкету.
+      function statusField(item, hint) {
+        const field = h("div", { class: "field full" });
+        const setClosed = closed => {
+          if (item.closed === closed) return;
+          item.closed = closed;
+          if (closed && !item.notice.trim()) item.notice = DEFAULT_NOTICE;
+          markDirty(closed ? "Запись закрыта" : "Запись открыта");
+          paint();
+        };
+        const paint = () => {
+          field.innerHTML = "";
+          appendChildren(field, [
+            h("div", { class: "field-label", text: "Запись" }),
+            segmented("Статус записи", [
+              { text: "Открыта", active: !item.closed, onSelect: () => setClosed(false) },
+              { text: "Закрыта", active: item.closed, tone: "closed", onSelect: () => setClosed(true) }
+            ]),
+            item.closed ? h("textarea", {
+              id: "noticeText",
+              value: item.notice,
+              maxLength: NOTICE_MAX,
+              placeholder: DEFAULT_NOTICE,
+              "aria-label": "Сообщение участнику",
+              oninput: event => { item.notice = event.target.value; markDirty("Сообщение изменено"); }
+            }) : null,
+            item.closed ? h("p", { class: "field-note", text: hint }) : null
+          ]);
+        };
+        paint();
+        return field;
+      }
+
+      function optionPanel({ nameLabel, placeholder, item, hint }) {
+        return h("section", { class: "panel" },
+          h("div", { class: "fields" },
+            textField({
+              id: "optionName",
+              label: nameLabel,
+              value: item.name,
+              maxLength: NAME_MAX,
+              placeholder,
+              full: true,
+              onInput: value => { item.name = value; syncPageTitle(value); markDirty("Название изменено"); }
+            }),
+            statusField(item, hint)
+          )
+        );
+      }
+
+      function moveItem(list, index, delta) {
         const next = index + delta;
-        if (next < 0 || next >= draft[key].length) return;
-        [draft[key][index], draft[key][next]] = [draft[key][next], draft[key][index]];
-        renderList(key);
-        markDirty("Порядок вариантов изменён");
+        if (next < 0 || next >= list.length) return;
+        [list[index], list[next]] = [list[next], list[index]];
+        markDirty("Порядок изменён");
+        render();
       }
 
-      function removeConfirmed(key, index) {
-        opened.delete(draft[key][index].uid);
-        draft[key].splice(index, 1);
-        renderList(key);
-        markDirty("Вариант удалён");
-      }
-
-      function remove(key, index) {
-        if (draft[key].length === 1) {
-          setState("Нельзя удалить", "Оставьте хотя бы один вариант", "error");
-          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
-          return;
+      function listRow({ item, index, items, isSorting, meta, tags, untitled, onOpen }) {
+        const name = item.name.trim();
+        const metaText = meta ? meta(item) : "";
+        const badges = tags(item);
+        const main = h("span", { class: "row-main" },
+          h("span", { class: name ? "row-name" : "row-name is-empty", text: name || untitled }),
+          metaText ? h("span", { class: "row-meta", text: metaText }) : null,
+          badges.length ? h("span", { class: "row-badges" }, badges) : null
+        );
+        if (isSorting) {
+          return h("div", { class: "row" }, main, h("div", { class: "row-tools" },
+            iconButton("↑", `Поднять выше: ${name || untitled}`, () => moveItem(items, index, -1), index === 0),
+            iconButton("↓", `Опустить ниже: ${name || untitled}`, () => moveItem(items, index, 1), index === items.length - 1)
+          ));
         }
-        const label = draft[key][index].value || "этот вариант";
-        if (tg && tg.showConfirm) {
-          tg.showConfirm(`Удалить «${label}»?`, confirmed => { if (confirmed) removeConfirmed(key, index); });
-        } else if (window.confirm(`Удалить «${label}»?`)) {
-          removeConfirmed(key, index);
-        }
+        return h("button", { type: "button", class: "row", onclick: () => onOpen(item) },
+          main,
+          h("span", { class: "chevron", "aria-hidden": "true", text: "›" })
+        );
       }
 
-      document.querySelectorAll("[data-list-card]").forEach(card => {
-        const key = card.dataset.listCard;
-        card.querySelector(".add-btn").addEventListener("click", () => {
-          draft[key].push(key === "mentors"
-            ? { uid: "v" + (++uid), value: "", notice: "", dates: null }
-            : { uid: "v" + (++uid), value: "", notice: "" });
-          renderList(key);
-          card.querySelector(".items .item-block:last-child input").focus();
-          markDirty("Заполните новый вариант");
-        });
-      });
+      // Список со строками-переходами. Порядок меняется в отдельном режиме,
+      // чтобы стрелки не мешали нажимать на строку.
+      function listPanel({ key, icon, title, description, items, meta, tags, untitled, onOpen, addLabel, onAdd, emptyText }) {
+        const isSorting = items.length > 1 && sorting.has(key);
+        const toggle = items.length > 1 ? h("button", {
+          type: "button",
+          class: isSorting ? "chip-btn active" : "chip-btn",
+          text: isSorting ? "Готово" : "↕ Порядок",
+          onclick: () => {
+            if (isSorting) sorting.delete(key);
+            else sorting.add(key);
+            render();
+          }
+        }) : null;
+        return h("section", { class: "panel" },
+          panelHeading(icon, [title, h("span", { class: "h2-count", text: items.length })], description, toggle),
+          items.length
+            ? h("div", { class: "rows" }, items.map((item, index) => listRow({ item, index, items, isSorting, meta, tags, untitled, onOpen })))
+            : h("p", { class: "empty", text: emptyText }),
+          isSorting ? null : h("button", { type: "button", class: "add-btn", text: addLabel, onclick: onAdd })
+        );
+      }
 
-      textKeys.forEach(key => {
-        document.getElementById(key).addEventListener("input", event => {
-          if (draft) draft[key] = event.target.value;
-          markDirty("Основные данные изменены");
-        });
-      });
+      function dangerZone({ label, note, question, blocked, onConfirm }) {
+        return h("div", { class: "danger-zone" },
+          h("button", {
+            type: "button",
+            class: "danger-btn",
+            text: label,
+            onclick: () => {
+              const reason = blocked ? blocked() : "";
+              if (reason) {
+                setState("Нельзя удалить", reason, "error");
+                haptic("error");
+                return;
+              }
+              confirmAction(question(), onConfirm);
+            }
+          }),
+          note ? h("p", { class: "danger-note", text: note }) : null
+        );
+      }
+
+      // ---------- страницы ----------
+      function homePage() {
+        return h("div", { class: "page" },
+          h("header", { class: "page-header" },
+            h("div", { class: "home-top" },
+              h("div", { class: "brand" }, h("span", { class: "brand-mark", text: "✦" }), h("span", { text: "Админ-панель" })),
+              h("div", { class: "identity", text: identity })
+            ),
+            h("h1", { class: "page-title", text: "Управление записью" })
+          ),
+
+          listPanel({
+            key: "cities",
+            icon: "📍",
+            title: "Города",
+            items: draft.cities,
+            meta: cityMeta,
+            tags: cityTags,
+            untitled: "Город без названия",
+            onOpen: city => go({ page: "city", city: city.uid }),
+            addLabel: "＋ Добавить город",
+            emptyText: "Добавьте хотя бы один город.",
+            onAdd: () => {
+              const city = newOption({ programs: [], mentors: [] });
+              draft.cities.push(city);
+              markDirty("Заполните новый город");
+              go({ page: "city", city: city.uid, focus: "optionName" });
+            }
+          }),
+
+          h("section", { class: "panel" },
+            h("div", { class: "fields" },
+              textField({
+                id: "eventName", label: "Название мероприятия", value: draft.eventName,
+                maxLength: 120, placeholder: "Например, Клуб счастливых привычек", full: true,
+                onInput: value => { draft.eventName = value; markDirty("Название изменено"); }
+              })
+            )
+          )
+        );
+      }
+
+      function cityPage(city) {
+        const sources = draft.cities.filter(other => other !== city && (other.programs.length || other.mentors.length));
+        const isEmpty = !city.programs.length && !city.mentors.length;
+        return h("div", { class: "page" },
+          pageHeader({ backLabel: "Все города", eyebrow: "Город", title: city.name, fallback: "Новый город", meta: cityMeta(city) }),
+          optionPanel({
+            nameLabel: "Название города",
+            placeholder: "Например, Москва",
+            item: city,
+            hint: "Бот покажет это сообщение сразу после выбора города и завершит анкету."
+          }),
+
+          isEmpty && sources.length ? h("section", { class: "panel soft" },
+            panelHeading("✨", "Быстрый старт", "Скопируйте направления и наставников из другого города."),
+            h("div", { class: "chips" }, sources.map(source => h("button", {
+              type: "button",
+              class: "chip-btn",
+              text: `Скопировать из «${source.name.trim() || "без названия"}»`,
+              onclick: () => {
+                city.programs = source.programs.map(program => ({ ...program, uid: nextUid(), isNew: false }));
+                city.mentors = source.mentors.map(mentor => ({ ...mentor, uid: nextUid(), isNew: false, dates: [...mentor.dates] }));
+                markDirty(`Скопировано из «${source.name.trim()}»`);
+                render();
+              }
+            })))
+          ) : null,
+
+          listPanel({
+            key: `programs:${city.uid}`,
+            icon: "🌿",
+            title: "Направления",
+            items: city.programs,
+            meta: programMeta,
+            tags: programTags,
+            untitled: "Направление без названия",
+            onOpen: program => go({ page: "program", city: city.uid, item: program.uid }),
+            addLabel: "＋ Добавить направление",
+            emptyText: "Направлений пока нет — в этом городе нельзя записаться.",
+            onAdd: () => {
+              // Реквизиты в городе обычно одни — подставляем их из платного направления.
+              const sample = city.programs.find(other => other.paid && other.payDetails.trim());
+              const program = newOption({ paid: true, price: "", payDetails: sample ? sample.payDetails : "" });
+              city.programs.push(program);
+              markDirty("Заполните новое направление");
+              go({ page: "program", city: city.uid, item: program.uid, focus: "optionName" });
+            }
+          }),
+
+          listPanel({
+            key: `mentors:${city.uid}`,
+            icon: "🤝",
+            title: "Наставники",
+            items: city.mentors,
+            meta: mentorMeta,
+            tags: mentorTags,
+            untitled: "Наставник без имени",
+            onOpen: mentor => go({ page: "mentor", city: city.uid, item: mentor.uid }),
+            addLabel: "＋ Добавить наставника",
+            emptyText: "Наставников пока нет — в этом городе нельзя записаться.",
+            onAdd: () => {
+              const mentor = newOption({ dates: [] });
+              city.mentors.push(mentor);
+              markDirty("Заполните нового наставника");
+              go({ page: "mentor", city: city.uid, item: mentor.uid, focus: "optionName" });
+            }
+          }),
+
+          dangerZone({
+            label: "Удалить город",
+            note: "Вместе с городом удалятся его направления, наставники и даты.",
+            blocked: () => draft.cities.length === 1 ? "Это единственный город — сначала добавьте другой" : "",
+            question: () => `Удалить город «${city.name.trim() || "без названия"}» со всеми направлениями и наставниками?`,
+            onConfirm: () => {
+              removeFrom(draft.cities, city);
+              markDirty("Город удалён");
+              back();
+            }
+          })
+        );
+      }
+
+      // Бесплатное направление бот записывает сразу; на платном спрашивает про
+      // абонемент и показывает стоимость и реквизиты этого направления.
+      function paymentPanel(program) {
+        const panel = h("section", { class: "panel" });
+        const setPaid = paid => {
+          if (program.paid === paid) return;
+          program.paid = paid;
+          markDirty(paid ? "Направление платное" : "Направление бесплатное");
+          paint();
+        };
+        const paint = () => {
+          panel.innerHTML = "";
+          panel.appendChild(h("div", { class: "fields" },
+            h("div", { class: "field full" },
+              h("div", { class: "field-label", text: "Участие" }),
+              segmented("Участие", [
+                { text: "Бесплатно", active: !program.paid, onSelect: () => setPaid(false) },
+                { text: "Платно", active: program.paid, onSelect: () => setPaid(true) }
+              ]),
+              h("p", {
+                class: "field-note",
+                text: program.paid
+                  ? "Бот спросит про абонемент, а без него покажет стоимость и реквизиты."
+                  : "Бот запишет участника сразу, без оплаты."
+              })
+            ),
+            program.paid ? textField({
+              id: "programPrice", label: "Стоимость", value: program.price,
+              maxLength: PRICE_MAX, placeholder: "Например, 1 500 ₽", full: true,
+              onInput: value => { program.price = value; markDirty("Стоимость изменена"); }
+            }) : null,
+            program.paid ? textField({
+              id: "programPayDetails", label: "Как оплатить", value: program.payDetails,
+              maxLength: PAY_DETAILS_MAX, placeholder: "Реквизиты и короткая инструкция", multiline: true, full: true,
+              onInput: value => { program.payDetails = value; markDirty("Реквизиты изменены"); }
+            }) : null
+          ));
+        };
+        paint();
+        return panel;
+      }
+
+      function programPage(city, program) {
+        const cityName = city.name.trim() || "Город";
+        return h("div", { class: "page" },
+          pageHeader({ backLabel: cityName, eyebrow: `Направление · ${cityName}`, title: program.name, fallback: "Новое направление" }),
+          optionPanel({
+            nameLabel: "Название направления",
+            placeholder: "Например, Занятия аромаклуба",
+            item: program,
+            hint: "Бот покажет это сообщение сразу после выбора направления и завершит анкету."
+          }),
+          paymentPanel(program),
+          isDoctor(program) ? h("section", { class: "panel soft" },
+            panelHeading("🩺", "Время из таблицы врача", "Если расписание врача подключено, участник выбирает слот из Google-таблицы вместо дат наставника, а оплата в боте не запрашивается.")
+          ) : null,
+          dangerZone({
+            label: "Удалить направление",
+            question: () => `Удалить направление «${program.name.trim() || "без названия"}» в городе «${cityName}»?`,
+            onConfirm: () => {
+              removeFrom(city.programs, program);
+              markDirty("Направление удалено");
+              back();
+            }
+          })
+        );
+      }
+
+      function datesPanel(mentor) {
+        const panel = h("section", { class: "panel" });
+        const moveDate = (index, delta) => {
+          const next = index + delta;
+          if (next < 0 || next >= mentor.dates.length) return;
+          [mentor.dates[index], mentor.dates[next]] = [mentor.dates[next], mentor.dates[index]];
+          markDirty("Порядок дат изменён");
+          paint();
+        };
+        const paint = focusIndex => {
+          panel.innerHTML = "";
+          const list = h("div", { class: "items" }, mentor.dates.map((value, index) => h("div", { class: "item" },
+            h("span", { class: "item-index", text: index + 1 }),
+            h("input", {
+              value,
+              maxLength: NAME_MAX,
+              placeholder: "Например, Вторник, 19:00",
+              autocomplete: "off",
+              "aria-label": `Дата и время ${index + 1}`,
+              oninput: event => { mentor.dates[index] = event.target.value; markDirty("Дата изменена"); }
+            }),
+            h("div", { class: "item-actions" },
+              iconButton("↑", "Поднять выше", () => moveDate(index, -1), index === 0),
+              iconButton("↓", "Опустить ниже", () => moveDate(index, 1), index === mentor.dates.length - 1),
+              iconButton("×", "Удалить дату", () => { mentor.dates.splice(index, 1); markDirty("Дата удалена"); paint(); }, false, "danger")
+            )
+          )));
+          appendChildren(panel, [
+            panelHeading("🗓️", ["Даты и время", h("span", { class: "h2-count", text: mentor.dates.length })]),
+            mentor.dates.length ? list : h("p", { class: "empty", text: "Дат пока нет. Без них бот попросит участника выбрать другого наставника." }),
+            h("button", {
+              type: "button",
+              class: "add-btn",
+              text: "＋ Добавить дату и время",
+              onclick: () => { mentor.dates.push(""); markDirty("Заполните новую дату"); paint(mentor.dates.length - 1); }
+            })
+          ]);
+          if (focusIndex != null) {
+            const inputs = list.querySelectorAll("input");
+            if (inputs[focusIndex]) inputs[focusIndex].focus();
+          }
+        };
+        paint();
+        return panel;
+      }
+
+      function mentorPage(city, mentor) {
+        const cityName = city.name.trim() || "Город";
+        return h("div", { class: "page" },
+          pageHeader({ backLabel: cityName, eyebrow: `Наставник · ${cityName}`, title: mentor.name, fallback: "Новый наставник" }),
+          optionPanel({
+            nameLabel: "Имя наставника",
+            placeholder: "Например, Наталья",
+            item: mentor,
+            hint: "Бот покажет это сообщение сразу после выбора наставника и завершит анкету."
+          }),
+          datesPanel(mentor),
+          dangerZone({
+            label: "Удалить наставника",
+            question: () => `Удалить наставника «${mentor.name.trim() || "без имени"}» и все его даты?`,
+            onConfirm: () => {
+              removeFrom(city.mentors, mentor);
+              markDirty("Наставник удалён");
+              back();
+            }
+          })
+        );
+      }
+
+      // ---------- сохранение ----------
+      // Проверяем до отправки и сразу открываем страницу, где нужно поправить.
+      function validateDraft() {
+        if (!draft.eventName.trim()) return { message: "Укажите название мероприятия", route: { page: "home", focus: "eventName" } };
+        if (!draft.cities.length) return { message: "Добавьте хотя бы один город", route: { page: "home" } };
+        const cityNames = new Set();
+        for (const city of draft.cities) {
+          const cityName = city.name.trim();
+          const cityRoute = { page: "city", city: city.uid, focus: "optionName" };
+          if (!cityName) return { message: "У города не заполнено название", route: cityRoute };
+          if (cityNames.has(normalizeName(cityName))) return { message: `Город «${cityName}» указан дважды`, route: cityRoute };
+          cityNames.add(normalizeName(cityName));
+          const checks = [
+            [city.programs, "program", "есть направление без названия", name => `направление «${name}» указано дважды`],
+            [city.mentors, "mentor", "есть наставник без имени", name => `наставник «${name}» указан дважды`]
+          ];
+          for (const [items, page, missing, duplicate] of checks) {
+            const names = new Set();
+            for (const item of items) {
+              const name = item.name.trim();
+              const itemRoute = { page, city: city.uid, item: item.uid, focus: "optionName" };
+              if (!name) return { message: `В городе «${cityName}» ${missing}`, route: itemRoute };
+              if (names.has(normalizeName(name))) return { message: `В городе «${cityName}» ${duplicate(name)}`, route: itemRoute };
+              names.add(normalizeName(name));
+            }
+          }
+          const unpaid = city.programs.find(paymentMissing);
+          if (unpaid) {
+            const noPrice = !unpaid.price.trim();
+            return {
+              message: `«${unpaid.name.trim()}» в городе «${cityName}»: ${noPrice ? "укажите стоимость" : "укажите, как оплатить"}`,
+              route: { page: "program", city: city.uid, item: unpaid.uid, focus: noPrice ? "programPrice" : "programPayDetails" }
+            };
+          }
+        }
+        return null;
+      }
+
+      function showProblem(problem) {
+        setState("Не удалось сохранить", problem.message, "error");
+        haptic("error");
+        const target = problem.route;
+        // Строим понятный путь «Назад»: главная → город → направление или наставник.
+        backStack.length = 0;
+        if (target.page !== "home") backStack.push({ route: { page: "home" }, scroll: 0 });
+        if (target.page === "program" || target.page === "mentor") {
+          backStack.push({ route: { page: "city", city: target.city }, scroll: 0 });
+        }
+        route = target;
+        render(0);
+      }
 
       saveButton.addEventListener("click", async () => {
         if (!draft || !dirty) return;
+        const problem = validateDraft();
+        if (problem) { showProblem(problem); return; }
         saveButton.disabled = true;
         saveButton.textContent = "Сохраняем…";
         setState("Сохраняем", "Пожалуйста, подождите", "dirty");
         try {
           const result = await api("/api/admin/config", { method: "PUT", body: JSON.stringify(toPayload()) });
-          draft = toDraft(result.config);
-          opened.clear();
-          renderAll();
+          draft = keepUids(toDraft(result.config), draft);
+          savedSnapshot = JSON.stringify(toPayload());
+          render();
           markClean("Настройки обновлены");
-          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+          haptic("success");
         } catch (error) {
           saveButton.disabled = false;
           setState("Не удалось сохранить", error.message, "error");
-          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
+          haptic("error");
         } finally {
           saveButton.textContent = "Сохранить";
         }
@@ -1038,12 +1294,11 @@
       api("/api/admin/config")
         .then(result => {
           draft = toDraft(result.config);
-          renderAll();
+          savedSnapshot = JSON.stringify(toPayload());
           brandGate.classList.add("hidden");
-          adminShell.classList.remove("hidden");
-          loading.classList.add("hidden");
-          form.classList.remove("hidden");
+          shell.classList.remove("hidden");
           savebar.classList.remove("hidden");
+          render(0);
           markClean();
         })
         .catch(error => {
