@@ -132,12 +132,15 @@ function normalizeProgramPayment(program) {
   };
 }
 
-// У каждого города свои направления и наставники, у направления — своя оплата,
-// у наставника — свои даты.
+// У каждого города свои направления и наставники. У направления — своя оплата
+// и даты, общие для всех его наставников.
 function normalizeCities(list) {
   return normalizeOptions(list, city => ({
-    programs: normalizeOptions(city.programs, normalizeProgramPayment),
-    mentors: normalizeOptions(city.mentors, mentor => ({ dates: normalizeDates(mentor.dates) }))
+    programs: normalizeOptions(city.programs, program => ({
+      ...normalizeProgramPayment(program),
+      dates: normalizeDates(program.dates)
+    })),
+    mentors: normalizeOptions(city.mentors, () => ({}))
   }));
 }
 
@@ -184,12 +187,35 @@ function withLegacyPayment(cities, source, defaults = {}) {
   });
 }
 
+// Раньше даты были у каждого наставника. Направление без своих дат получает даты
+// всех наставников города (повторы уберёт нормализация): ни одна дата не пропадёт.
+function withLegacyDates(cities) {
+  if (!Array.isArray(cities)) return cities;
+  return cities.map(raw => {
+    const city = asPlainObject(raw);
+    if (!Array.isArray(city.programs)) return raw;
+    const mentorDates = (Array.isArray(city.mentors) ? city.mentors : []).flatMap(mentor => {
+      const dates = asPlainObject(mentor).dates;
+      return Array.isArray(dates) ? dates : [];
+    });
+    return {
+      ...city,
+      programs: city.programs.map(item => {
+        const program = asPlainObject(item);
+        return Array.isArray(program.dates) ? item : { ...program, dates: [...mentorDates] };
+      })
+    };
+  });
+}
+
 function toCurrentConfig(config, fallback = {}) {
   const source = asPlainObject(config);
   const current = { ...source };
   [...LEGACY_CONFIG_KEYS, ...LEGACY_PAYMENT_KEYS].forEach(key => delete current[key]);
   if (isLegacyConfig(source)) current.cities = migrateLegacyCities(source);
-  if (Array.isArray(current.cities)) current.cities = withLegacyPayment(current.cities, source, asPlainObject(fallback));
+  if (Array.isArray(current.cities)) {
+    current.cities = withLegacyDates(withLegacyPayment(current.cities, source, asPlainObject(fallback)));
+  }
   return current;
 }
 
@@ -982,6 +1008,14 @@ bot.on("callback_query:data", async (ctx) => {
       await stopRegistration(ctx, `Направление: ${program.name}`, program.notice);
       return;
     }
+    const doctorFlow = isDoctorProgram(program.name) && isDoctorScheduleConfigured();
+    if (!doctorFlow && !program.dates.length) {
+      // Анкету не обрываем: у другого направления даты могут быть.
+      await ctx.editMessageText(`У направления «${program.name}» пока нет дат для записи. Выберите другое направление:`, {
+        reply_markup: choiceKeyboard(optionNames(city.programs), "program", true)
+      });
+      return;
+    }
     s.draft.program = program.name;
     await ctx.editMessageText(`Направление: ${s.draft.program}`);
     s.step = "name";
@@ -994,14 +1028,10 @@ bot.on("callback_query:data", async (ctx) => {
       await stopRegistration(ctx, `Наставник: ${mentor.name}`, mentor.notice);
       return;
     }
+    const program = findOption(city.programs, s.draft.program);
     const doctorFlow = isDoctorProgram(s.draft.program) && isDoctorScheduleConfigured();
-    if (!doctorFlow && !mentor.dates.length) {
-      // Анкету не обрываем: у другого наставника даты могут быть.
-      await ctx.editMessageText(`У наставника «${mentor.name}» пока нет дат для записи. Выберите другого наставника:`, {
-        reply_markup: choiceKeyboard(optionNames(city.mentors), "mentor")
-      });
-      return;
-    }
+    // Направление удалили или оставили без дат, пока участник отвечал.
+    if (!program || (!doctorFlow && !program.dates.length)) { await restartRegistration(ctx); return; }
     s.draft.mentor = mentor.name;
     if (doctorFlow) {
       s.step = "doctor_slot";
@@ -1017,9 +1047,10 @@ bot.on("callback_query:data", async (ctx) => {
       }
     } else {
       s.step = "date";
+      s.draft.dates = program.dates;
       saveSession(ctx.from.id, s);
       await ctx.editMessageText(`Наставник: ${s.draft.mentor}`);
-      await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(mentor.dates, "date") });
+      await ctx.reply("Выберите дату:", { reply_markup: choiceKeyboard(program.dates, "date") });
     }
 
   } else if (type === "doctor_refresh" && s.step === "doctor_slot") {
@@ -1071,10 +1102,17 @@ bot.on("callback_query:data", async (ctx) => {
   } else if (type === "date" && s.step === "date") {
     const mentor = findOption(city.mentors, s.draft.mentor);
     const program = findOption(city.programs, s.draft.program);
-    if (!mentor || !program) { await restartRegistration(ctx); return; }
-    // Даты могли смениться, пока участник думал: чужой индекс молча игнорируем.
-    if (!mentor.dates[idx]) return;
-    s.draft.date = mentor.dates[idx];
+    if (!mentor || !program || !program.dates.length) { await restartRegistration(ctx); return; }
+    // Анкета помнит показанные кнопки. Если админ поменял даты, пока участник
+    // думал, показываем новый список, а не записываем на чужую дату.
+    const date = Array.isArray(s.draft.dates) ? s.draft.dates[idx] : undefined;
+    if (!date || !program.dates.includes(date)) {
+      s.draft.dates = program.dates;
+      saveSession(ctx.from.id, s);
+      await ctx.editMessageText("Даты изменились. Выберите дату:", { reply_markup: choiceKeyboard(program.dates, "date") });
+      return;
+    }
+    s.draft.date = date;
     // Бесплатному направлению не нужны ни абонемент, ни оплата — записываем сразу.
     if (!program.paid) {
       await ctx.editMessageText(`Дата: ${s.draft.date}`);
@@ -1232,9 +1270,9 @@ function sanitizeConfigInput(input) {
   if (!result.eventName) throw new Error("Укажите название мероприятия");
   if (result.eventName.length > 120) throw new Error("Название мероприятия длиннее 120 символов");
 
-  // Панель, открытая до обновления, ещё присылает общую стоимость в корне:
-  // её направления остаются платными, а не становятся бесплатными молча.
-  result.cities = sanitizeOptions(withLegacyPayment(input.cities, input), {
+  // Панель, открытая до обновления, ещё присылает общую стоимость в корне и даты
+  // у наставников: направления остаются платными и получают эти даты.
+  result.cities = sanitizeOptions(withLegacyDates(withLegacyPayment(input.cities, input)), {
     missing: "Заполните название города",
     duplicate: name => `Город «${name}» указан дважды`,
     tooMany: "Слишком много городов"
@@ -1243,12 +1281,15 @@ function sanitizeConfigInput(input) {
       missing: `В городе «${cityName}» есть направление без названия`,
       duplicate: name => `В городе «${cityName}» направление «${name}» указано дважды`,
       tooMany: `В городе «${cityName}» слишком много направлений`
-    }, (program, programName) => sanitizeProgramPayment(program, `${cityName}, ${programName}`)),
+    }, (program, programName) => ({
+      ...sanitizeProgramPayment(program, `${cityName}, ${programName}`),
+      dates: sanitizeDates(program.dates, `${cityName}, ${programName}`)
+    })),
     mentors: sanitizeOptions(city.mentors, {
       missing: `В городе «${cityName}» есть наставник без имени`,
       duplicate: name => `В городе «${cityName}» наставник «${name}» указан дважды`,
       tooMany: `В городе «${cityName}» слишком много наставников`
-    }, (mentor, mentorName) => ({ dates: sanitizeDates(mentor.dates, `${cityName}, ${mentorName}`) }))
+    }, () => ({}))
   }));
   if (!result.cities.length) throw new Error("Нужен хотя бы один город");
   return result;

@@ -559,9 +559,10 @@
             programs: (city.programs || []).map(program => toOption(program, {
               paid: !!program.paid,
               price: program.price || "",
-              payDetails: program.payDetails || ""
+              payDetails: program.payDetails || "",
+              dates: [...(program.dates || [])]
             })),
-            mentors: (city.mentors || []).map(mentor => toOption(mentor, { dates: [...(mentor.dates || [])] }))
+            mentors: (city.mentors || []).map(mentor => toOption(mentor, {}))
           }))
         };
       }
@@ -571,8 +572,8 @@
         return { uid: nextUid(), name: "", closed: false, notice: "", isNew: true, ...extra };
       }
 
-      function filledDates(mentor) {
-        return mentor.dates.map(date => date.trim()).filter(Boolean);
+      function filledDates(program) {
+        return program.dates.map(date => date.trim()).filter(Boolean);
       }
 
       function fromOption(option) {
@@ -585,7 +586,7 @@
         const payment = program.paid
           ? { paid: true, price: program.price.trim(), payDetails: program.payDetails.trim() }
           : { paid: false, price: "", payDetails: "" };
-        return { ...fromOption(program), ...payment };
+        return { ...fromOption(program), ...payment, dates: filledDates(program) };
       }
 
       function toPayload() {
@@ -594,7 +595,7 @@
           cities: draft.cities.map(city => ({
             ...fromOption(city),
             programs: city.programs.map(fromProgram),
-            mentors: city.mentors.map(mentor => ({ ...fromOption(mentor), dates: filledDates(mentor) }))
+            mentors: city.mentors.map(fromOption)
           }))
         };
       }
@@ -637,9 +638,8 @@
           countText(city.mentors.length, "наставник", "наставника", "наставников");
       }
 
-      function mentorMeta(mentor) {
-        const dates = filledDates(mentor);
-        if (!dates.length) return "Даты не заданы";
+      function datesSummary(program) {
+        const dates = filledDates(program);
         const shown = dates.slice(0, 3).join(" · ");
         return dates.length > 3 ? `${shown} · ещё ${dates.length - 3}` : shown;
       }
@@ -660,19 +660,19 @@
 
       function programMeta(program) {
         const payment = program.paid ? program.price.trim() || "Платно" : "Бесплатно";
-        return isDoctor(program) ? `${payment} · время из таблицы врача` : payment;
+        const schedule = isDoctor(program) ? "время из таблицы врача" : datesSummary(program);
+        return schedule ? `${payment} · ${schedule}` : payment;
       }
 
       function programTags(program) {
         if (program.closed) return [tag("⏸ Запись закрыта", "warn")];
         if (paymentMissing(program)) return [tag("⚠ Не заполнена оплата", "danger")];
+        if (!isDoctor(program) && !filledDates(program).length) return [tag("⚠ Нет дат", "danger")];
         return [];
       }
 
       function mentorTags(mentor) {
-        if (mentor.closed) return [tag("⏸ Запись закрыта", "warn")];
-        if (!filledDates(mentor).length) return [tag("⚠ Нет дат", "danger")];
-        return [];
+        return mentor.closed ? [tag("⏸ Запись закрыта", "warn")] : [];
       }
 
       // ---------- навигация ----------
@@ -693,10 +693,10 @@
           [target, list] = [city, draft.cities];
         } else if (route.page === "program") {
           const program = findItem(city.programs, route.item);
-          if (blank(program)) [target, list] = [program, city.programs];
+          if (blank(program) && !filledDates(program).length) [target, list] = [program, city.programs];
         } else if (route.page === "mentor") {
           const mentor = findItem(city.mentors, route.item);
-          if (blank(mentor) && !filledDates(mentor).length) [target, list] = [mentor, city.mentors];
+          if (blank(mentor)) [target, list] = [mentor, city.mentors];
         }
         if (!target) return false;
         removeFrom(list, target);
@@ -1011,8 +1011,8 @@
               class: "chip-btn",
               text: `Скопировать из «${source.name.trim() || "без названия"}»`,
               onclick: () => {
-                city.programs = source.programs.map(program => ({ ...program, uid: nextUid(), isNew: false }));
-                city.mentors = source.mentors.map(mentor => ({ ...mentor, uid: nextUid(), isNew: false, dates: [...mentor.dates] }));
+                city.programs = source.programs.map(program => ({ ...program, uid: nextUid(), isNew: false, dates: [...program.dates] }));
+                city.mentors = source.mentors.map(mentor => ({ ...mentor, uid: nextUid(), isNew: false }));
                 markDirty(`Скопировано из «${source.name.trim()}»`);
                 render();
               }
@@ -1033,7 +1033,7 @@
             onAdd: () => {
               // Реквизиты в городе обычно одни — подставляем их из платного направления.
               const sample = city.programs.find(other => other.paid && other.payDetails.trim());
-              const program = newOption({ paid: true, price: "", payDetails: sample ? sample.payDetails : "" });
+              const program = newOption({ paid: true, price: "", payDetails: sample ? sample.payDetails : "", dates: [] });
               city.programs.push(program);
               markDirty("Заполните новое направление");
               go({ page: "program", city: city.uid, item: program.uid, focus: "optionName" });
@@ -1045,14 +1045,13 @@
             icon: "🤝",
             title: "Наставники",
             items: city.mentors,
-            meta: mentorMeta,
             tags: mentorTags,
             untitled: "Наставник без имени",
             onOpen: mentor => go({ page: "mentor", city: city.uid, item: mentor.uid }),
             addLabel: "＋ Добавить наставника",
             emptyText: "Наставников пока нет — в этом городе нельзя записаться.",
             onAdd: () => {
-              const mentor = newOption({ dates: [] });
+              const mentor = newOption({});
               city.mentors.push(mentor);
               markDirty("Заполните нового наставника");
               go({ page: "mentor", city: city.uid, item: mentor.uid, focus: "optionName" });
@@ -1126,8 +1125,9 @@
             hint: "Бот покажет это сообщение сразу после выбора направления и завершит анкету."
           }),
           paymentPanel(program),
+          datesPanel(program),
           isDoctor(program) ? h("section", { class: "panel soft" },
-            panelHeading("🩺", "Время из таблицы врача", "Если расписание врача подключено, участник выбирает слот из Google-таблицы вместо дат наставника, а оплата в боте не запрашивается.")
+            panelHeading("🩺", "Время из таблицы врача", "Если расписание врача подключено, участник выбирает слот из Google-таблицы вместо этих дат, а оплата в боте не запрашивается.")
           ) : null,
           dangerZone({
             label: "Удалить направление",
@@ -1141,18 +1141,19 @@
         );
       }
 
-      function datesPanel(mentor) {
+      // Даты направления общие для всех его наставников: участник видит их после выбора наставника.
+      function datesPanel(program) {
         const panel = h("section", { class: "panel" });
         const moveDate = (index, delta) => {
           const next = index + delta;
-          if (next < 0 || next >= mentor.dates.length) return;
-          [mentor.dates[index], mentor.dates[next]] = [mentor.dates[next], mentor.dates[index]];
+          if (next < 0 || next >= program.dates.length) return;
+          [program.dates[index], program.dates[next]] = [program.dates[next], program.dates[index]];
           markDirty("Порядок дат изменён");
           paint();
         };
         const paint = focusIndex => {
           panel.innerHTML = "";
-          const list = h("div", { class: "items" }, mentor.dates.map((value, index) => h("div", { class: "item" },
+          const list = h("div", { class: "items" }, program.dates.map((value, index) => h("div", { class: "item" },
             h("span", { class: "item-index", text: index + 1 }),
             h("input", {
               value,
@@ -1160,22 +1161,22 @@
               placeholder: "Например, Вторник, 19:00",
               autocomplete: "off",
               "aria-label": `Дата и время ${index + 1}`,
-              oninput: event => { mentor.dates[index] = event.target.value; markDirty("Дата изменена"); }
+              oninput: event => { program.dates[index] = event.target.value; markDirty("Дата изменена"); }
             }),
             h("div", { class: "item-actions" },
               iconButton("↑", "Поднять выше", () => moveDate(index, -1), index === 0),
-              iconButton("↓", "Опустить ниже", () => moveDate(index, 1), index === mentor.dates.length - 1),
-              iconButton("×", "Удалить дату", () => { mentor.dates.splice(index, 1); markDirty("Дата удалена"); paint(); }, false, "danger")
+              iconButton("↓", "Опустить ниже", () => moveDate(index, 1), index === program.dates.length - 1),
+              iconButton("×", "Удалить дату", () => { program.dates.splice(index, 1); markDirty("Дата удалена"); paint(); }, false, "danger")
             )
           )));
           appendChildren(panel, [
-            panelHeading("🗓️", ["Даты и время", h("span", { class: "h2-count", text: mentor.dates.length })]),
-            mentor.dates.length ? list : h("p", { class: "empty", text: "Дат пока нет. Без них бот попросит участника выбрать другого наставника." }),
+            panelHeading("🗓️", ["Даты и время", h("span", { class: "h2-count", text: program.dates.length })], "Общие для всех наставников."),
+            program.dates.length ? list : h("p", { class: "empty", text: "Дат пока нет. Без них бот попросит участника выбрать другое направление." }),
             h("button", {
               type: "button",
               class: "add-btn",
               text: "＋ Добавить дату и время",
-              onclick: () => { mentor.dates.push(""); markDirty("Заполните новую дату"); paint(mentor.dates.length - 1); }
+              onclick: () => { program.dates.push(""); markDirty("Заполните новую дату"); paint(program.dates.length - 1); }
             })
           ]);
           if (focusIndex != null) {
@@ -1197,10 +1198,9 @@
             item: mentor,
             hint: "Бот покажет это сообщение сразу после выбора наставника и завершит анкету."
           }),
-          datesPanel(mentor),
           dangerZone({
             label: "Удалить наставника",
-            question: () => `Удалить наставника «${mentor.name.trim() || "без имени"}» и все его даты?`,
+            question: () => `Удалить наставника «${mentor.name.trim() || "без имени"}»?`,
             onConfirm: () => {
               removeFrom(city.mentors, mentor);
               markDirty("Наставник удалён");
