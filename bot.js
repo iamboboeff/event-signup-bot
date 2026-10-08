@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const crypto = require("crypto");
-const { Bot, InlineKeyboard, Keyboard, webhookCallback } = require("grammy");
+const { Bot, InlineKeyboard, InputFile, Keyboard, webhookCallback } = require("grammy");
 
 // ---------- env ----------
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -51,6 +51,16 @@ const WEBHOOK_PATH = "/webhook";
 const DOCTOR_SHEET_WEBAPP_URL = normalizePublicUrl(process.env.DOCTOR_SHEET_WEBAPP_URL);
 const DOCTOR_SHEET_SECRET = String(process.env.DOCTOR_SHEET_SECRET || "").trim();
 const DOCTOR_PROGRAM_NAME = "диагностика с доктором";
+// Оплата по СБП через платёжный шлюз Альфа-Банка. Пока не заданы логин, пароль
+// и ключ подписи callback, платные заявки оплачиваются по реквизитам вручную.
+// По умолчанию — песочница банка; боевой адрес: https://payment.alfabank.ru/payment/rest
+const ALFA_API_URL = String(process.env.ALFA_API_URL || "https://alfa.rbsuat.com/payment/rest").trim().replace(/\/+$/, "");
+const ALFA_USERNAME = String(process.env.ALFA_USERNAME || "").trim();
+const ALFA_PASSWORD = String(process.env.ALFA_PASSWORD || "").trim();
+const ALFA_CALLBACK_SECRET = String(process.env.ALFA_CALLBACK_SECRET || "").trim();
+const ALFA_CALLBACK_PATH = "/payments/alfa/callback";
+const ALFA_ORDER_TTL_MINUTES = 20;
+const SBP_PAID_BY = "СБП";
 
 // ---------- storage ----------
 // config.json хранит только исходные значения. Все изменения из админки и
@@ -344,6 +354,19 @@ async function updateReg(id, field, value) {
   if (reg) { reg[field] = value; saveRegs(regs); }
 }
 
+// Обновить несколько полей разом и вернуть запись до изменения. Чтение и запись
+// синхронные, поэтому callback банка и кнопка «Проверить оплату», пришедшие
+// одновременно, видят состояние друг друга и не дублируют уведомления.
+function patchReg(id, fields) {
+  const regs = loadRegs();
+  const reg = regs.find(r => String(r.id) === String(id));
+  if (!reg) return null;
+  const before = { ...reg };
+  Object.assign(reg, fields);
+  saveRegs(regs);
+  return before;
+}
+
 // Удалить запись целиком (выбранного участника).
 async function deleteReg(id) {
   const regs = loadRegs().filter(r => String(r.id) !== String(id));
@@ -492,6 +515,213 @@ async function refreshDoctorSlots(ctx, session, editMessage = false, prefix = ""
   else await ctx.reply(text, options);
 }
 
+// ---------- оплата СБП (Альфа-Банк) ----------
+function isAlfaSbpConfigured() {
+  return /^https:\/\//i.test(ALFA_API_URL) && Boolean(ALFA_USERNAME && ALFA_PASSWORD && ALFA_CALLBACK_SECRET);
+}
+
+// «1 500 ₽», «1500 руб.», «990,50» → сумма в копейках. Непонятную строку не
+// угадываем: такая заявка оплачивается по реквизитам, как раньше.
+function priceToKopecks(price) {
+  const compact = String(price || "").replace(/[\s  ]/g, "");
+  const match = compact.match(/^(\d{1,9})(?:[.,](\d{1,2}))?(?:₽|руб\.?|р\.?|rub)?$/i);
+  if (!match) return null;
+  const kopecks = Number(match[1]) * 100 + Number((match[2] || "").padEnd(2, "0"));
+  return kopecks > 0 ? kopecks : null;
+}
+
+async function callAlfa(baseUrl, credentials, method, params = {}, fetchImpl = fetch) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const body = new URLSearchParams({ userName: credentials.userName, password: credentials.password });
+    Object.entries(params).forEach(([key, value]) => {
+      if (value != null && value !== "") body.set(key, String(value));
+    });
+    const response = await fetchImpl(`${baseUrl}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    if (!result || typeof result !== "object") throw new Error("Банк вернул пустой ответ");
+    // errorCode "0" или его отсутствие — запрос обработан.
+    if (result.errorCode != null && String(result.errorCode) !== "0") {
+      const error = new Error(result.errorMessage || `Ошибка банка ${result.errorCode}`);
+      error.code = String(result.errorCode);
+      throw error;
+    }
+    return result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function alfaRequest(method, params) {
+  return callAlfa(ALFA_API_URL, { userName: ALFA_USERNAME, password: ALFA_PASSWORD }, method, params);
+}
+
+// Подпись callback по документации шлюза: все параметры, кроме checksum и
+// sign_alias, по алфавиту в строку «имя;значение;…;», затем HMAC-SHA256
+// общим с банком ключом в верхнем регистре.
+function alfaCallbackChecksum(params, secret) {
+  const signed = Object.keys(params)
+    .filter(key => key !== "checksum" && key !== "sign_alias")
+    .sort()
+    .map(key => `${key};${params[key]};`)
+    .join("");
+  return crypto.createHmac("sha256", secret).update(signed).digest("hex").toUpperCase();
+}
+
+function verifyAlfaCallback(params, secret) {
+  const received = String(params.checksum || "");
+  if (!secret || !/^[0-9a-f]{64}$/i.test(received)) return false;
+  const expected = Buffer.from(alfaCallbackChecksum(params, secret), "hex");
+  const actual = Buffer.from(received, "hex");
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+// Номер заказа в банке — «<id заявки>-<метка попытки>»: шлюз не принимает
+// повторный номер, а после истечения QR участник может получить новый.
+function regIdFromOrderNumber(orderNumber) {
+  return String(orderNumber || "").split("-")[0];
+}
+
+async function createSbpPayment(reg) {
+  const amount = priceToKopecks(reg.price);
+  if (!amount) throw new Error(`Не удалось разобрать стоимость «${reg.price}»`);
+  const orderNumber = `${reg.id}-${Date.now().toString(36)}`;
+  // В описании заказа банк запрещает персональные данные — только направление и дата.
+  const purpose = [reg.program, reg.date].filter(Boolean).join(", ");
+  const order = await alfaRequest("register.do", {
+    orderNumber,
+    amount,
+    returnUrl: `https://t.me/${bot.botInfo.username}`,
+    description: purpose.slice(0, 598),
+    sessionTimeoutSecs: ALFA_ORDER_TTL_MINUTES * 60,
+    language: "ru"
+  });
+  if (!order.orderId) throw new Error("Банк не вернул номер заказа");
+  const qr = await alfaRequest("sbp/c2b/qr/dynamic/get.do", {
+    mdOrder: order.orderId,
+    paymentPurpose: purpose.slice(0, 140),
+    qrFormat: "image",
+    qrWidth: 400,
+    qrHeight: 400
+  });
+  if (!/^https:\/\//i.test(qr.payload || "")) throw new Error("Банк не вернул ссылку на оплату");
+  return {
+    orderId: order.orderId,
+    orderNumber,
+    amount,
+    qrId: qr.qrId || "",
+    payload: qr.payload,
+    renderedQr: String(qr.renderedQr || "").replace(/^data:[^,]*,/, "")
+  };
+}
+
+// Выставить участнику QR: картинка — чтобы оплатить с другого устройства,
+// кнопка — чтобы на телефоне сразу выбрать банк.
+async function startSbpPayment(userId, reg, prefix = "") {
+  const payment = await createSbpPayment(reg);
+  const fields = {
+    payStatus: "pending",
+    alfaOrderId: payment.orderId,
+    alfaOrderNumber: payment.orderNumber,
+    alfaQrId: payment.qrId,
+    alfaAmount: payment.amount
+  };
+  Object.assign(reg, fields);
+  patchReg(reg.id, fields);
+
+  const keyboard = new InlineKeyboard()
+    .url("💳 Оплатить через СБП", payment.payload).row()
+    .text("🔄 Проверить оплату", `chk:${reg.id}`);
+  const text = `${prefix}Стоимость участия — ${reg.price}.\n\n` +
+    "Оплатите через СБП: на телефоне нажмите «Оплатить через СБП» и выберите свой банк " +
+    "или отсканируйте QR-код камерой. Запись подтвердится автоматически, как только банк пришлёт оплату.\n\n" +
+    `QR-код действует ${ALFA_ORDER_TTL_MINUTES} минут.`;
+  if (payment.renderedQr) {
+    try {
+      await bot.api.sendPhoto(userId, new InputFile(Buffer.from(payment.renderedQr, "base64"), "sbp-qr.png"), {
+        caption: text,
+        reply_markup: keyboard
+      });
+      return;
+    } catch (e) {
+      console.error("Не удалось отправить картинку QR-кода:", e.message);
+    }
+  }
+  await bot.api.sendMessage(userId, text, { reply_markup: keyboard });
+}
+
+function newQrKeyboard(reg) {
+  return new InlineKeyboard().text("🔁 Получить новый QR-код", `newqr:${reg.id}`);
+}
+
+// Оплату засчитываем только по ответу шлюза на наш собственный запрос: заказ
+// завершён и сумма совпадает с выставленной. Callback лишь повод проверить.
+async function confirmSbpPayment(mdOrder) {
+  const order = await alfaRequest("getOrderStatusExtended.do", { orderId: mdOrder });
+  if (Number(order.orderStatus) !== 2) return { paid: false };
+  const reg = await getReg(regIdFromOrderNumber(order.orderNumber));
+  if (!reg) {
+    console.error(`Оплата СБП ${mdOrder} без заявки (номер заказа ${order.orderNumber})`);
+    return { paid: false };
+  }
+  if (reg.alfaAmount && Number(order.amount) !== Number(reg.alfaAmount)) {
+    console.error(`Оплата СБП ${mdOrder}: сумма ${order.amount} вместо ${reg.alfaAmount}, заявка ${reg.id}`);
+    return { paid: false };
+  }
+  const changed = await setRegPaid(reg, true, SBP_PAID_BY, { payStatus: "paid", paidOrderId: mdOrder });
+  if (changed) {
+    console.log(`✓ Оплата СБП подтверждена: заявка ${reg.id}, заказ ${mdOrder}`);
+    await postGroupNote(reg);
+  }
+  return { paid: true, reg };
+}
+
+// Текущий QR больше не оплатить (истёк срок или банк отклонил платёж) —
+// предлагаем участнику новый. Уведомления по старым заказам не трогают заявку.
+async function offerNewSbpQr(params, text) {
+  const reg = await getReg(regIdFromOrderNumber(params.orderNumber));
+  if (!reg || reg.paid || reg.alfaOrderId !== params.mdOrder) return;
+  patchReg(reg.id, { payStatus: "expired" });
+  if (!reg.userId) return;
+  try {
+    await bot.api.sendMessage(reg.userId, text, { reply_markup: newQrKeyboard(reg) });
+  } catch (e) { /* пользователь мог заблокировать бота */ }
+}
+
+async function refundSbpPayment(params) {
+  const reg = await getReg(regIdFromOrderNumber(params.orderNumber));
+  if (!reg || !reg.paidOrderId || reg.paidOrderId !== params.mdOrder) return;
+  await setRegPaid(reg, false, "", { payStatus: "refunded" });
+  await postGroupNote(reg);
+}
+
+// Уведомление шлюза. Возвращает HTTP-код ответа: всё, кроме 200, банк
+// повторит ещё до трёх раз с интервалом 30 секунд.
+async function handleAlfaCallback(params) {
+  if (!verifyAlfaCallback(params, ALFA_CALLBACK_SECRET)) return 403;
+  const { mdOrder, operation } = params;
+  const success = String(params.status) === "1";
+  if (!mdOrder) return 200;
+
+  if (operation === "deposited" && success) {
+    await confirmSbpPayment(mdOrder);
+  } else if (operation === "deposited") {
+    await offerNewSbpQr(params, "Банк отклонил оплату. Можно попробовать ещё раз с новым QR-кодом.");
+  } else if (operation === "declinedByTimeout") {
+    await offerNewSbpQr(params, "Время на оплату истекло, QR-код больше не действует. Если хотите оплатить — получите новый.");
+  } else if ((operation === "refunded" || operation === "reversed") && success) {
+    await refundSbpPayment(params);
+  }
+  return 200;
+}
+
 function choiceKeyboard(items, prefix, onePerRow = false) {
   const k = new InlineKeyboard();
   items.forEach((item, i) => {
@@ -570,7 +800,7 @@ async function restartRegistration(ctx) {
 // Показываем: бесплатные, абонемент, подтверждённую оплату и «заявил об оплате» (с пометкой ожидания).
 // Возвращает { text, keyboard } или null, если записей нет.
 async function buildListView(arg) {
-  const regs = (await getRegs()).filter(r => r.free || r.sub || r.paid || r.claimed);
+  const regs = (await getRegs()).filter(r => r.free || r.sub || r.paid || r.claimed || r.payStatus === "pending");
   const filtered = arg
     ? regs.filter(r => r.date.toLowerCase() === arg.toLowerCase())
     : regs;
@@ -584,7 +814,7 @@ async function buildListView(arg) {
     const list = byDay[day];
     msg += `📋 ${day} (${list.length}):\n`;
     list.forEach((r, i) => {
-      const pending = !r.free && !r.sub && !r.paid && r.claimed ? " (ожидание оплаты)" : "";
+      const pending = !r.free && !r.sub && !r.paid && (r.claimed || r.payStatus === "pending") ? " (ожидание оплаты)" : "";
       const route = [r.city, r.program, r.mentor].filter(Boolean).join(" — ");
       const kind = r.free ? "бесплатно" : r.sub ? "абонемент" : "оплата";
       msg += `${i + 1}. ${r.name}${route ? " — " + route : ""} — ${kind}${pending}\n`;
@@ -678,7 +908,9 @@ function groupNoteText(reg, priceText) {
     t += `\nУчастие: по абонементу (бесплатно)`;
   } else {
     t += `\nУчастие: оплата${priceText ? " " + priceText : ""}`;
-    if (reg.paid) t += `\n✅ Оплачено${reg.paidBy ? " · отметил " + reg.paidBy : ""}`;
+    if (reg.paid && reg.paidBy === SBP_PAID_BY) t += `\n✅ Оплачено через СБП — банк подтвердил автоматически`;
+    else if (reg.paid) t += `\n✅ Оплачено${reg.paidBy ? " · отметил " + reg.paidBy : ""}`;
+    else if (reg.payStatus === "refunded") t += `\n↩️ Был возврат денег — проверьте в личном кабинете банка`;
     else if (reg.claimed) t += `\n🙋 Сообщил(а) об оплате — проверьте и подтвердите`;
     else t += `\n⏳ Оплата ожидается`;
   }
@@ -692,6 +924,55 @@ function payKeyboard(reg) {
     reg.paid ? "↩️ Отменить отметку" : "✅ Отметить оплаченным",
     `pay:${reg.paid ? 0 : 1}:${reg.id}`
   );
+}
+
+// Отправить карточку заявки в группу или обновить уже отправленную.
+async function postGroupNote(reg) {
+  if (!GROUP_CHAT_ID) return;
+  const cfg = await getConfig();
+  const text = groupNoteText(reg, registrationPrice(reg, cfg));
+  if (reg.groupMsgId) {
+    try {
+      await bot.api.editMessageText(GROUP_CHAT_ID, reg.groupMsgId, text, { reply_markup: payKeyboard(reg) });
+    } catch (e) { /* текст не изменился или сообщение удалили */ }
+    return;
+  }
+  try {
+    const sent = await bot.api.sendMessage(GROUP_CHAT_ID, text, { reply_markup: payKeyboard(reg) });
+    reg.groupMsgId = sent.message_id;
+    await updateReg(reg.id, "groupMsgId", sent.message_id);
+  } catch (e) { console.error("Не удалось отправить в группу:", e.message); }
+}
+
+async function notifyPaymentConfirmed(reg) {
+  if (!reg.userId) return;
+  try {
+    const booking = reg.program
+      ? `на «${reg.program}»${reg.city ? " (" + reg.city + ")" : ""}`
+      : `на «${reg.date}»`;
+    await bot.api.sendMessage(
+      reg.userId,
+      `✅ Ваша оплата подтверждена. Бронь ${booking} подтверждена. До встречи!`
+    );
+    await bot.api.sendMessage(
+      reg.userId,
+      "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
+      { reply_markup: mainMenu }
+    );
+  } catch (e) { /* пользователь мог не начинать диалог с ботом */ }
+}
+
+// Отметка оплаты — от админа в группе или от банка. Участнику пишем только при
+// переходе в «оплачено», поэтому повторный callback или клик не дублируют сообщение.
+// Возвращает true, если статус оплаты изменился.
+async function setRegPaid(reg, paid, paidBy, extra = {}) {
+  const fields = { ...extra, paid, paidBy: paid ? paidBy : "" };
+  const before = patchReg(reg.id, fields);
+  Object.assign(reg, fields);
+  if (!before) return false;
+  const changed = (before.paid === true) !== paid;
+  if (changed && paid) await notifyPaymentConfirmed(reg);
+  return changed;
 }
 
 // Админ нажал кнопку оплаты в группе.
@@ -710,32 +991,13 @@ async function handlePayToggle(ctx, data) {
     return;
   }
 
-  reg.paid = paid;
-  reg.paidBy = paid ? (ctx.from.username ? "@" + ctx.from.username : (ctx.from.first_name || "админ")) : "";
-  await updateReg(reg.id, "paid", paid);
+  const paidBy = ctx.from.username ? "@" + ctx.from.username : (ctx.from.first_name || "админ");
+  await setRegPaid(reg, paid, paidBy);
 
   const cfg = await getConfig();
   try {
     await ctx.editMessageText(groupNoteText(reg, registrationPrice(reg, cfg)), { reply_markup: payKeyboard(reg) });
   } catch (e) { /* сообщение могли удалить */ }
-
-  // сообщить записавшемуся
-  if (paid && reg.userId) {
-    try {
-      const booking = reg.program
-        ? `на «${reg.program}»${reg.city ? " (" + reg.city + ")" : ""}`
-        : `на «${reg.date}»`;
-      await bot.api.sendMessage(
-        reg.userId,
-        `✅ Ваша оплата подтверждена. Бронь ${booking} подтверждена. До встречи!`
-      );
-      await bot.api.sendMessage(
-        reg.userId,
-        "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
-        { reply_markup: mainMenu }
-      );
-    } catch (e) { /* пользователь мог не начинать диалог с ботом */ }
-  }
 }
 
 // Пользователь нажал «Я оплатил(а)» — помечаем заявку и сообщаем админу.
@@ -753,20 +1015,55 @@ async function handlePaidClaim(ctx, data) {
   } catch (e) { /* ignore */ }
 
   // Только теперь уведомляем админа в группе — с кнопкой подтверждения оплаты.
-  if (GROUP_CHAT_ID) {
-    const cfg = await getConfig();
-    if (reg.groupMsgId) {
-      // на случай повторного нажатия — просто обновляем статус существующего сообщения
-      try {
-        await bot.api.editMessageText(GROUP_CHAT_ID, reg.groupMsgId, groupNoteText(reg, registrationPrice(reg, cfg)), { reply_markup: payKeyboard(reg) });
-      } catch (e) { /* ignore */ }
-    } else {
-      try {
-        const sent = await bot.api.sendMessage(GROUP_CHAT_ID, groupNoteText(reg, registrationPrice(reg, cfg)), { reply_markup: payKeyboard(reg) });
-        reg.groupMsgId = sent.message_id;
-        await updateReg(reg.id, "groupMsgId", sent.message_id);
-      } catch (e) { console.error("Не удалось отправить в группу:", e.message); }
-    }
+  // При повторном нажатии обновится уже отправленная карточка.
+  await postGroupNote(reg);
+}
+
+// Участник нажал «Проверить оплату» — на случай, если callback банка не дошёл.
+async function handlePaymentCheck(ctx, data) {
+  const reg = await getReg(data.split(":")[1]);
+  if (!reg || reg.userId !== ctx.from.id) {
+    await ctx.answerCallbackQuery({ text: "Заявка не найдена.", show_alert: true });
+    return;
+  }
+  if (reg.paid) {
+    await ctx.answerCallbackQuery({ text: "Оплата уже подтверждена ✅", show_alert: true });
+    return;
+  }
+  if (!reg.alfaOrderId || !isAlfaSbpConfigured()) {
+    await ctx.answerCallbackQuery({ text: "Проверить оплату не получилось. Напишите администратору.", show_alert: true });
+    return;
+  }
+  try {
+    const result = await confirmSbpPayment(reg.alfaOrderId);
+    await ctx.answerCallbackQuery(result.paid
+      ? { text: "Оплата подтверждена ✅" }
+      : { text: "Оплата пока не поступила. Если вы уже оплатили, подождите минуту и проверьте ещё раз.", show_alert: true });
+  } catch (e) {
+    console.error("Не удалось проверить оплату СБП:", e.message);
+    await ctx.answerCallbackQuery({ text: "Банк сейчас не отвечает. Попробуйте чуть позже.", show_alert: true });
+  }
+}
+
+// Участник просит новый QR взамен истёкшего или отклонённого.
+async function handleNewQr(ctx, data) {
+  await ctx.answerCallbackQuery();
+  const reg = await getReg(data.split(":")[1]);
+  if (!reg || reg.userId !== ctx.from.id) {
+    await ctx.reply("Заявка не найдена. Нажмите «📝 Записаться», чтобы оформить новую.", { reply_markup: mainMenu });
+    return;
+  }
+  if (reg.paid) {
+    await ctx.reply("Оплата по этой заявке уже подтверждена ✅");
+    return;
+  }
+  try { await ctx.editMessageReplyMarkup(); } catch (e) { /* кнопку могли уже убрать */ }
+  try {
+    if (!isAlfaSbpConfigured()) throw new Error("Оплата СБП не подключена");
+    await startSbpPayment(ctx.from.id, reg);
+  } catch (e) {
+    console.error("Не удалось выставить новый QR СБП:", e.message);
+    await ctx.reply("Не удалось получить QR-код. Попробуйте чуть позже.", { reply_markup: newQrKeyboard(reg) });
   }
 }
 
@@ -956,6 +1253,8 @@ bot.on("callback_query:data", async (ctx) => {
   const data = ctx.callbackQuery.data;
   if (data.startsWith("pay:")) return handlePayToggle(ctx, data);
   if (data.startsWith("claim:")) return handlePaidClaim(ctx, data);
+  if (data.startsWith("chk:")) return handlePaymentCheck(ctx, data);
+  if (data.startsWith("newqr:")) return handleNewQr(ctx, data);
   if (data.startsWith("delok:")) return handleDeleteConfirm(ctx, data);
   if (data === "delcancel") {
     await ctx.answerCallbackQuery();
@@ -1170,20 +1469,27 @@ async function finish(ctx, draft, program) {
       "Чтобы записать ещё одного человека — нажмите «📝 Записаться».",
       { reply_markup: mainMenu }
     );
-  } else {
+  } else if (!(isAlfaSbpConfigured() && priceToKopecks(reg.price) && await trySbpPayment(ctx, reg))) {
     await ctx.reply(paymentText(program), {
       reply_markup: new InlineKeyboard().text("✅ Я оплатил(а)", `claim:${reg.id}`)
     });
   }
 
   // Уведомление в группу: для бесплатных и абонемента — сразу (запись подтверждена, оплаты нет).
-  // Для платных уведомление НЕ шлём здесь — оно уйдёт только после нажатия «Я оплатил(а)».
-  if (GROUP_CHAT_ID && (free || reg.sub)) {
-    try {
-      const sent = await bot.api.sendMessage(GROUP_CHAT_ID, groupNoteText(reg, reg.price), { reply_markup: payKeyboard(reg) });
-      reg.groupMsgId = sent.message_id;
-      await updateReg(reg.id, "groupMsgId", sent.message_id);
-    } catch (e) { console.error("Не удалось отправить в группу:", e.message); }
+  // Для платных уведомление НЕ шлём здесь — оно уйдёт после оплаты через СБП
+  // или после нажатия «Я оплатил(а)».
+  if (free || reg.sub) await postGroupNote(reg);
+}
+
+// Если банк не ответил, участник не остаётся без способа оплатить: вызывающий
+// покажет реквизиты и кнопку «Я оплатил(а)», как до подключения СБП.
+async function trySbpPayment(ctx, reg) {
+  try {
+    await startSbpPayment(ctx.from.id, reg);
+    return true;
+  } catch (e) {
+    console.error("Не удалось выставить счёт СБП:", e.message);
+    return false;
   }
 }
 
@@ -1210,21 +1516,37 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function readRequestJson(req) {
+function readRequestBody(req, maxLength) {
   return new Promise((resolve, reject) => {
     let body = "";
     req.setEncoding("utf8");
     req.on("data", chunk => {
       body += chunk;
-      // Настройки вложены по городам — даём запас, но не бесконечный.
-      if (body.length > 256 * 1024) reject(new Error("Слишком большой запрос"));
+      if (body.length > maxLength) reject(new Error("Слишком большой запрос"));
     });
-    req.on("end", () => {
-      try { resolve(body ? JSON.parse(body) : {}); }
-      catch (e) { reject(new Error("Некорректный JSON")); }
-    });
+    req.on("end", () => resolve(body));
     req.on("error", reject);
   });
+}
+
+async function readRequestJson(req) {
+  // Настройки вложены по городам — даём запас, но не бесконечный.
+  const body = await readRequestBody(req, 256 * 1024);
+  try { return body ? JSON.parse(body) : {}; }
+  catch (e) { throw new Error("Некорректный JSON"); }
+}
+
+// Шлюз присылает параметры в строке запроса (GET) или в теле (POST).
+async function readCallbackParams(req) {
+  const url = new URL(req.url || "/", "http://localhost");
+  const params = Object.fromEntries(url.searchParams);
+  if (req.method !== "POST") return params;
+  const body = (await readRequestBody(req, 16 * 1024)).trim();
+  if (body.startsWith("{")) {
+    try { return { ...params, ...JSON.parse(body) }; }
+    catch (e) { throw new Error("Некорректный JSON"); }
+  }
+  return { ...params, ...Object.fromEntries(new URLSearchParams(body)) };
 }
 
 // Проверка initData по алгоритму Telegram Web Apps. Клиентский user.id никогда
@@ -1350,6 +1672,21 @@ async function handleHttpRequest(req, res, webhookHandle) {
     return;
   }
 
+  if (pathname === ALFA_CALLBACK_PATH && isAlfaSbpConfigured()) {
+    let status;
+    try {
+      status = await handleAlfaCallback(await readCallbackParams(req));
+    } catch (e) {
+      // Банк повторит уведомление, если ответить ошибкой.
+      console.error("Ошибка обработки callback СБП:", e.message);
+      status = 500;
+    }
+    if (status === 403) console.error("Callback СБП с неверной подписью отклонён");
+    res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(status === 200 ? "OK" : "ERROR");
+    return;
+  }
+
   if (req.method === "GET" && (pathname === "/admin" || pathname === "/admin/")) {
     try {
       const html = fs.readFileSync(ADMIN_HTML_PATH);
@@ -1421,6 +1758,9 @@ async function startApp() {
   });
   server.listen(PORT, async () => {
     console.log(`✓ HTTP-сервер и админ-панель слушают порт ${PORT}`);
+    console.log(isAlfaSbpConfigured()
+      ? `✓ Оплата СБП через Альфа-Банк включена (${ALFA_API_URL}), callback: ${ALFA_CALLBACK_PATH}`
+      : "• Оплата СБП не подключена — платные заявки оплачиваются по реквизитам");
     if (WEBHOOK_URL) {
       try {
         const url = WEBHOOK_URL.replace(/\/$/, "") + WEBHOOK_PATH;
@@ -1443,19 +1783,24 @@ if (require.main === module) {
 module.exports = {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
+  alfaCallbackChecksum,
+  callAlfa,
   callDoctorSchedule,
   cityStopMessage,
   doctorSlotLabel,
   findOption,
   groupNoteText,
+  handleAlfaCallback,
   isAdmin,
   isDoctorProgram,
   normalizeConfig,
   normalizeDoctorSlots,
   normalizeSessionStore,
   parseAdminTarget,
+  priceToKopecks,
   registrationPrice,
   resolveAdminWebappUrl,
   sanitizeConfigInput,
-  validateTelegramInitData
+  validateTelegramInitData,
+  verifyAlfaCallback
 };

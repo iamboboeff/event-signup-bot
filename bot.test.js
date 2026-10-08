@@ -10,26 +10,34 @@ process.env.ADMIN_IDS = "42";
 process.env.ADMIN_USERNAMES = "editor";
 const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "event-signup-bot-test-"));
 process.env.DATA_DIR = testDataDir;
+process.env.ALFA_USERNAME = "test-api";
+process.env.ALFA_PASSWORD = "test-password";
+process.env.ALFA_CALLBACK_SECRET = "test-callback-secret";
 after(() => fs.rmSync(testDataDir, { recursive: true, force: true }));
 
 const {
   ADMIN_BOT_COMMANDS,
   PUBLIC_BOT_COMMANDS,
+  alfaCallbackChecksum,
+  callAlfa,
   callDoctorSchedule,
   cityStopMessage,
   doctorSlotLabel,
   findOption,
   groupNoteText,
+  handleAlfaCallback,
   isAdmin,
   isDoctorProgram,
   normalizeConfig,
   normalizeSessionStore,
   normalizeDoctorSlots,
   parseAdminTarget,
+  priceToKopecks,
   registrationPrice,
   resolveAdminWebappUrl,
   sanitizeConfigInput,
-  validateTelegramInitData
+  validateTelegramInitData,
+  verifyAlfaCallback
 } = require("./bot");
 
 function signInitData(entries) {
@@ -327,6 +335,88 @@ test("free and paid registrations are announced with the right terms", () => {
   // Заявка помнит стоимость на момент записи, а заявки до оплаты по направлениям берут её из направления.
   assert.equal(registrationPrice({ ...reg, price: "1 500 ₽" }, cfg), "1 500 ₽");
   assert.equal(registrationPrice(reg, cfg), "2 000 ₽");
+});
+
+test("SBP payments confirmed by the bank are announced as automatic", () => {
+  const reg = { name: "Анна", city: "Питер", program: "Аромаклуб", mentor: "Серебро", date: "Пн" };
+  assert.match(groupNoteText({ ...reg, paid: true, paidBy: "СБП" }, "1 500 ₽"), /✅ Оплачено через СБП/);
+  assert.match(groupNoteText({ ...reg, paid: true, paidBy: "@admin" }, "1 500 ₽"), /✅ Оплачено · отметил @admin/);
+  assert.match(groupNoteText({ ...reg, paid: false, payStatus: "refunded" }, "1 500 ₽"), /Был возврат денег/);
+});
+
+test("program prices from the admin panel turn into kopecks for the bank", () => {
+  assert.equal(priceToKopecks("1 500 ₽"), 150000);
+  assert.equal(priceToKopecks("1 500 руб."), 150000);
+  assert.equal(priceToKopecks("990,5"), 99050);
+  assert.equal(priceToKopecks("990.05 р."), 99005);
+  // Непонятную стоимость не угадываем — такая заявка оплачивается по реквизитам.
+  assert.equal(priceToKopecks("от 1 500 ₽"), null);
+  assert.equal(priceToKopecks("1 500 ₽ / 2 000 ₽"), null);
+  assert.equal(priceToKopecks("0 ₽"), null);
+  assert.equal(priceToKopecks(""), null);
+});
+
+test("bank callback checksum matches the example from the Alfa-Bank docs", () => {
+  // Пример симметричной подписи из документации платёжного шлюза.
+  const params = {
+    checksum: "EAF2FB72CAB99FD5067F4BA493DD84F4D79C1589FDE8ED29622F0F07215AA972",
+    mdOrder: "06cf5599-3f17-7c86-bdbc-bd7d00a8b38b",
+    operation: "approved",
+    orderNumber: "2003",
+    status: "1"
+  };
+  assert.equal(alfaCallbackChecksum(params, "ooc7slpvc61k7sf7ma7p4hrefr"), params.checksum);
+  assert.equal(verifyAlfaCallback(params, "ooc7slpvc61k7sf7ma7p4hrefr"), true);
+  assert.equal(verifyAlfaCallback({ ...params, checksum: params.checksum.toLowerCase() }, "ooc7slpvc61k7sf7ma7p4hrefr"), true);
+  assert.equal(verifyAlfaCallback({ ...params, operation: "deposited" }, "ooc7slpvc61k7sf7ma7p4hrefr"), false);
+  assert.equal(verifyAlfaCallback({ ...params, sign_alias: "key1" }, "ooc7slpvc61k7sf7ma7p4hrefr"), true);
+  assert.equal(verifyAlfaCallback(params, "another-secret"), false);
+  assert.equal(verifyAlfaCallback({ ...params, checksum: "" }, "ooc7slpvc61k7sf7ma7p4hrefr"), false);
+});
+
+test("forged bank callbacks are rejected, signed ones for unknown orders are acknowledged", async () => {
+  const secret = process.env.ALFA_CALLBACK_SECRET;
+  const forged = { mdOrder: "x", orderNumber: "1-a", operation: "deposited", status: "1", checksum: "A".repeat(64) };
+  assert.equal(await handleAlfaCallback(forged), 403);
+  assert.equal(await handleAlfaCallback({ ...forged, checksum: undefined }), 403);
+
+  const timeout = { mdOrder: "unknown-order", orderNumber: "1-a", operation: "declinedByTimeout", status: "1" };
+  timeout.checksum = alfaCallbackChecksum(timeout, secret);
+  assert.equal(await handleAlfaCallback(timeout), 200);
+});
+
+test("Alfa-Bank client posts form fields with credentials and reports error codes", async () => {
+  const requests = [];
+  const fetchOk = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ orderId: "md-1", formUrl: "https://pay" }) };
+  };
+  const credentials = { userName: "test-api", password: "secret" };
+  const result = await callAlfa("https://alfa.rbsuat.com/payment/rest", credentials, "register.do", {
+    orderNumber: "1-a",
+    amount: 150000,
+    description: ""
+  }, fetchOk);
+  assert.equal(result.orderId, "md-1");
+  assert.equal(requests[0].url, "https://alfa.rbsuat.com/payment/rest/register.do");
+  assert.equal(requests[0].options.headers["Content-Type"], "application/x-www-form-urlencoded");
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(requests[0].options.body)), {
+    userName: "test-api",
+    password: "secret",
+    orderNumber: "1-a",
+    amount: "150000"
+  });
+
+  const fetchDuplicate = async () => ({
+    ok: true,
+    json: async () => ({ errorCode: "1", errorMessage: "Order number is duplicated" })
+  });
+  await assert.rejects(
+    callAlfa("https://alfa.rbsuat.com/payment/rest", credentials, "register.do", {}, fetchDuplicate),
+    error => error.code === "1" && /duplicated/.test(error.message)
+  );
+  const fetchStatusOk = async () => ({ ok: true, json: async () => ({ errorCode: "0", orderStatus: 2 }) });
+  assert.equal((await callAlfa("https://x", credentials, "getOrderStatusExtended.do", {}, fetchStatusOk)).orderStatus, 2);
 });
 
 test("default settings pass the same validation as the admin panel", () => {
