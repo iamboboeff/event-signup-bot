@@ -28,6 +28,7 @@ const {
   handleAlfaCallback,
   isAdmin,
   isDoctorProgram,
+  isSbpOrderExpired,
   normalizeConfig,
   normalizeSessionStore,
   normalizeDoctorSlots,
@@ -392,6 +393,19 @@ test("without a signing key callbacks for unknown orders never reach the bank", 
   assert.equal(await handleAlfaCallback(unsigned, ""), 200);
   assert.equal(await handleAlfaCallback({ ...unsigned, operation: "refunded" }, ""), 200);
   assert.equal(await handleAlfaCallback({ ...unsigned, mdOrder: undefined }, ""), 200);
+});
+
+test("without callbacks the payment check notices an expired QR", () => {
+  const now = Date.parse("2026-10-19T12:00:00.000Z");
+  const reg = { alfaCreatedAt: "2026-10-19T11:50:00.000Z" };
+  // QR живёт 20 минут: через 10 минут он ещё действует, если банк не отменил заказ.
+  assert.equal(isSbpOrderExpired(reg, 0, now), false);
+  assert.equal(isSbpOrderExpired(reg, 6, now), true);
+  assert.equal(isSbpOrderExpired(reg, 3, now), true);
+  // Через 25 минут истёк, даже если банк ещё не поменял статус заказа.
+  assert.equal(isSbpOrderExpired({ alfaCreatedAt: "2026-10-19T11:35:00.000Z" }, 0, now), true);
+  // У заявок до этого обновления времени выставления нет — решает только статус банка.
+  assert.equal(isSbpOrderExpired({}, 0, now), false);
 });
 
 test("the Mintsifry root certificate for Alfa-Bank requests ships with the bot", () => {

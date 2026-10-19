@@ -674,7 +674,8 @@ async function startSbpPayment(userId, reg, prefix = "") {
     alfaOrderId: payment.orderId,
     alfaOrderNumber: payment.orderNumber,
     alfaQrId: payment.qrId,
-    alfaAmount: payment.amount
+    alfaAmount: payment.amount,
+    alfaCreatedAt: new Date().toISOString()
   };
   Object.assign(reg, fields);
   patchReg(reg.id, fields);
@@ -682,9 +683,12 @@ async function startSbpPayment(userId, reg, prefix = "") {
   const keyboard = new InlineKeyboard()
     .url("💳 Оплатить через СБП", payment.payload).row()
     .text("🔄 Проверить оплату", `chk:${reg.id}`);
+  // Пока банк не подключил callback-уведомления, оплату подтверждает кнопка
+  // «Проверить оплату», поэтому просим нажать её явно.
   const text = `${prefix}Стоимость участия — ${reg.price}.\n\n` +
-    "Оплатите через СБП: на телефоне нажмите «Оплатить через СБП» и выберите свой банк " +
-    "или отсканируйте QR-код камерой. Запись подтвердится автоматически, как только банк пришлёт оплату.\n\n" +
+    "1. Оплатите через СБП: на телефоне нажмите «Оплатить через СБП» и выберите свой банк " +
+    "или отсканируйте QR-код камерой.\n" +
+    "2. После оплаты вернитесь сюда и нажмите «🔄 Проверить оплату» — бот подтвердит запись.\n\n" +
     `QR-код действует ${ALFA_ORDER_TTL_MINUTES} минут.`;
   if (payment.renderedQr) {
     try {
@@ -708,7 +712,7 @@ function newQrKeyboard(reg) {
 // завершён и сумма совпадает с выставленной. Callback лишь повод проверить.
 async function confirmSbpPayment(mdOrder) {
   const order = await alfaRequest("getOrderStatusExtended.do", { orderId: mdOrder });
-  if (Number(order.orderStatus) !== 2) return { paid: false };
+  if (Number(order.orderStatus) !== 2) return { paid: false, orderStatus: Number(order.orderStatus) };
   const reg = await getReg(regIdFromOrderNumber(order.orderNumber));
   if (!reg) {
     console.error(`Оплата СБП ${mdOrder} без заявки (номер заказа ${order.orderNumber})`);
@@ -724,6 +728,14 @@ async function confirmSbpPayment(mdOrder) {
     await postGroupNote(reg);
   }
   return { paid: true, reg };
+}
+
+// QR больше не оплатить: банк отменил (3) или отклонил (6) заказ, либо срок
+// жизни заказа прошёл — о нём без callback бот узнаёт только по часам.
+function isSbpOrderExpired(reg, orderStatus, now = Date.now()) {
+  if (orderStatus === 3 || orderStatus === 6) return true;
+  const createdAt = Date.parse(reg.alfaCreatedAt || "");
+  return Number.isFinite(createdAt) && now - createdAt > (ALFA_ORDER_TTL_MINUTES + 2) * 60_000;
 }
 
 // Текущий QR больше не оплатить (истёк срок или банк отклонил платёж) —
@@ -1093,9 +1105,20 @@ async function handlePaymentCheck(ctx, data) {
   }
   try {
     const result = await confirmSbpPayment(reg.alfaOrderId);
-    await ctx.answerCallbackQuery(result.paid
-      ? { text: "Оплата подтверждена ✅" }
-      : { text: "Оплата пока не поступила. Если вы уже оплатили, подождите минуту и проверьте ещё раз.", show_alert: true });
+    if (result.paid) {
+      await ctx.answerCallbackQuery({ text: "Оплата подтверждена ✅" });
+    } else if (isSbpOrderExpired(reg, result.orderStatus)) {
+      patchReg(reg.id, { payStatus: "expired" });
+      await ctx.answerCallbackQuery();
+      await ctx.reply("Время на оплату истекло, QR-код больше не действует. Если хотите оплатить — получите новый.", {
+        reply_markup: newQrKeyboard(reg)
+      });
+    } else {
+      await ctx.answerCallbackQuery({
+        text: "Оплата пока не поступила. Если вы уже оплатили, подождите минуту и проверьте ещё раз.",
+        show_alert: true
+      });
+    }
   } catch (e) {
     console.error("Не удалось проверить оплату СБП:", e.message);
     await ctx.answerCallbackQuery({ text: "Банк сейчас не отвечает. Попробуйте чуть позже.", show_alert: true });
@@ -1851,6 +1874,7 @@ module.exports = {
   handleAlfaCallback,
   isAdmin,
   isDoctorProgram,
+  isSbpOrderExpired,
   normalizeConfig,
   normalizeDoctorSlots,
   normalizeSessionStore,
