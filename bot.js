@@ -2,6 +2,8 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const https = require("https");
+const tls = require("tls");
 const crypto = require("crypto");
 const { Bot, InlineKeyboard, InputFile, Keyboard, webhookCallback } = require("grammy");
 
@@ -51,16 +53,20 @@ const WEBHOOK_PATH = "/webhook";
 const DOCTOR_SHEET_WEBAPP_URL = normalizePublicUrl(process.env.DOCTOR_SHEET_WEBAPP_URL);
 const DOCTOR_SHEET_SECRET = String(process.env.DOCTOR_SHEET_SECRET || "").trim();
 const DOCTOR_PROGRAM_NAME = "диагностика с доктором";
-// Оплата по СБП через платёжный шлюз Альфа-Банка. Пока не заданы логин, пароль
-// и ключ подписи callback, платные заявки оплачиваются по реквизитам вручную.
-// По умолчанию — песочница банка; боевой адрес: https://payment.alfabank.ru/payment/rest
-const ALFA_API_URL = String(process.env.ALFA_API_URL || "https://alfa.rbsuat.com/payment/rest").trim().replace(/\/+$/, "");
+// Оплата по СБП через платёжный шлюз Альфа-Банка. Пока не заданы API-логин и
+// пароль, платные заявки оплачиваются по реквизитам вручную. Ключ подписи
+// callback необязателен: каждое уведомление бот всё равно перепроверяет в банке.
+// По умолчанию — боевой адрес; песочница: https://alfa.rbsuat.com/payment/rest
+const ALFA_API_URL = String(process.env.ALFA_API_URL || "https://pay.alfabank.ru/payment/rest").trim().replace(/\/+$/, "");
 const ALFA_USERNAME = String(process.env.ALFA_USERNAME || "").trim();
 const ALFA_PASSWORD = String(process.env.ALFA_PASSWORD || "").trim();
 const ALFA_CALLBACK_SECRET = String(process.env.ALFA_CALLBACK_SECRET || "").trim();
 const ALFA_CALLBACK_PATH = "/payments/alfa/callback";
 const ALFA_ORDER_TTL_MINUTES = 20;
 const SBP_PAID_BY = "СБП";
+// Сайты Альфа-Банка подписаны сертификатом НУЦ Минцифры, которого нет среди
+// доверенных у Node.js. Добавляем его только к запросам в банк.
+const RUSSIAN_ROOT_CA_PATH = path.join(__dirname, "certs", "russian_trusted_root_ca.pem");
 
 // ---------- storage ----------
 // config.json хранит только исходные значения. Все изменения из админки и
@@ -517,7 +523,44 @@ async function refreshDoctorSlots(ctx, session, editMessage = false, prefix = ""
 
 // ---------- оплата СБП (Альфа-Банк) ----------
 function isAlfaSbpConfigured() {
-  return /^https:\/\//i.test(ALFA_API_URL) && Boolean(ALFA_USERNAME && ALFA_PASSWORD && ALFA_CALLBACK_SECRET);
+  return /^https:\/\//i.test(ALFA_API_URL) && Boolean(ALFA_USERNAME && ALFA_PASSWORD);
+}
+
+function loadAlfaAgent() {
+  const ca = [...tls.rootCertificates];
+  try {
+    ca.push(fs.readFileSync(RUSSIAN_ROOT_CA_PATH, "utf8"));
+  } catch (e) {
+    console.error("Не найден сертификат Минцифры — запросы в Альфа-Банк не пройдут проверку:", e.message);
+  }
+  return new https.Agent({ ca, keepAlive: true });
+}
+
+let alfaAgent = null;
+
+// Тот же интерфейс, что у fetch (ok, status, json()), но с сертификатом Минцифры.
+function alfaFetch(url, { method, headers, body, signal }) {
+  if (!alfaAgent) alfaAgent = loadAlfaAgent();
+  return new Promise((resolve, reject) => {
+    const request = https.request(url, {
+      method,
+      headers: { ...headers, "Content-Length": Buffer.byteLength(body) },
+      agent: alfaAgent,
+      signal
+    }, response => {
+      let data = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { data += chunk; });
+      response.on("end", () => resolve({
+        ok: response.statusCode >= 200 && response.statusCode < 300,
+        status: response.statusCode,
+        json: async () => JSON.parse(data)
+      }));
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
 }
 
 // «1 500 ₽», «1500 руб.», «990,50» → сумма в копейках. Непонятную строку не
@@ -530,7 +573,7 @@ function priceToKopecks(price) {
   return kopecks > 0 ? kopecks : null;
 }
 
-async function callAlfa(baseUrl, credentials, method, params = {}, fetchImpl = fetch) {
+async function callAlfa(baseUrl, credentials, method, params = {}, fetchImpl = alfaFetch) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -688,6 +731,12 @@ async function confirmSbpPayment(mdOrder) {
 async function offerNewSbpQr(params, text) {
   const reg = await getReg(regIdFromOrderNumber(params.orderNumber));
   if (!reg || reg.paid || reg.alfaOrderId !== params.mdOrder) return;
+  // Уведомлению не верим на слово: оплаченный заказ не может «истечь».
+  const order = await alfaRequest("getOrderStatusExtended.do", { orderId: params.mdOrder });
+  if (Number(order.orderStatus) === 2) {
+    await confirmSbpPayment(params.mdOrder);
+    return;
+  }
   patchReg(reg.id, { payStatus: "expired" });
   if (!reg.userId) return;
   try {
@@ -698,17 +747,25 @@ async function offerNewSbpQr(params, text) {
 async function refundSbpPayment(params) {
   const reg = await getReg(regIdFromOrderNumber(params.orderNumber));
   if (!reg || !reg.paidOrderId || reg.paidOrderId !== params.mdOrder) return;
+  // Снимаем оплату, только если банк сам подтвердит отмену (3) или возврат (4).
+  const order = await alfaRequest("getOrderStatusExtended.do", { orderId: params.mdOrder });
+  if (![3, 4].includes(Number(order.orderStatus))) return;
   await setRegPaid(reg, false, "", { payStatus: "refunded" });
   await postGroupNote(reg);
 }
 
 // Уведомление шлюза. Возвращает HTTP-код ответа: всё, кроме 200, банк
 // повторит ещё до трёх раз с интервалом 30 секунд.
-async function handleAlfaCallback(params) {
-  if (!verifyAlfaCallback(params, ALFA_CALLBACK_SECRET)) return 403;
+// Подпись проверяем, если банк выдал ключ. Без ключа уведомление может прислать
+// кто угодно, поэтому оно лишь повод спросить банк: оплату, отмену и возврат
+// бот засчитывает только по ответу шлюза на свой запрос с API-логином.
+async function handleAlfaCallback(params, secret = ALFA_CALLBACK_SECRET) {
+  if (secret && !verifyAlfaCallback(params, secret)) return 403;
   const { mdOrder, operation } = params;
   const success = String(params.status) === "1";
   if (!mdOrder) return 200;
+  // Чужие и выдуманные заказы не превращаем в запросы к банку.
+  if (!(await getReg(regIdFromOrderNumber(params.orderNumber)))) return 200;
 
   if (operation === "deposited" && success) {
     await confirmSbpPayment(mdOrder);
@@ -1759,7 +1816,8 @@ async function startApp() {
   server.listen(PORT, async () => {
     console.log(`✓ HTTP-сервер и админ-панель слушают порт ${PORT}`);
     console.log(isAlfaSbpConfigured()
-      ? `✓ Оплата СБП через Альфа-Банк включена (${ALFA_API_URL}), callback: ${ALFA_CALLBACK_PATH}`
+      ? `✓ Оплата СБП через Альфа-Банк включена (${ALFA_API_URL}), callback: ${ALFA_CALLBACK_PATH}, ` +
+        (ALFA_CALLBACK_SECRET ? "подпись проверяется" : "без ключа подписи — каждое уведомление перепроверяется в банке")
       : "• Оплата СБП не подключена — платные заявки оплачиваются по реквизитам");
     if (WEBHOOK_URL) {
       try {

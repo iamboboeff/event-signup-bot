@@ -385,6 +385,23 @@ test("forged bank callbacks are rejected, signed ones for unknown orders are ack
   assert.equal(await handleAlfaCallback(timeout), 200);
 });
 
+test("without a signing key callbacks for unknown orders never reach the bank", async () => {
+  // Без ключа уведомление принимается, но по чужому или выдуманному заказу бот
+  // не идёт в банк: тест упал бы на сетевом запросе к шлюзу.
+  const unsigned = { mdOrder: "x", orderNumber: "999-a", operation: "deposited", status: "1" };
+  assert.equal(await handleAlfaCallback(unsigned, ""), 200);
+  assert.equal(await handleAlfaCallback({ ...unsigned, operation: "refunded" }, ""), 200);
+  assert.equal(await handleAlfaCallback({ ...unsigned, mdOrder: undefined }, ""), 200);
+});
+
+test("the Mintsifry root certificate for Alfa-Bank requests ships with the bot", () => {
+  const pem = fs.readFileSync(path.join(__dirname, "certs", "russian_trusted_root_ca.pem"), "utf8");
+  const cert = new crypto.X509Certificate(pem);
+  assert.match(cert.subject, /CN=Russian Trusted Root CA/);
+  assert.equal(cert.ca, true);
+  assert.equal(cert.fingerprint256, "D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31");
+});
+
 test("Alfa-Bank client posts form fields with credentials and reports error codes", async () => {
   const requests = [];
   const fetchOk = async (url, options) => {
